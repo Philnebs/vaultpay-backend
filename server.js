@@ -69,7 +69,18 @@ app.post('/register', async (req, res) => {
 
     const { password: _, ...userWithoutPassword } = user.toObject();
 
-    res.status(201).json({ message: "User created", user: userWithoutPassword });
+    // Generate token
+    const token = jwt.sign(
+      { id: user._id }, 
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.status(201).json({ 
+      message: "User created", 
+      token: token,
+      user: userWithoutPassword 
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
