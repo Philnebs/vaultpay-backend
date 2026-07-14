@@ -429,4 +429,16 @@ app.post('/api/webhook', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// 404 HANDLER - tells us what route was not found
+app.use((req, res) => {
+  console.log(`404: ${req.method} ${req.url}`); // this will show in Render logs
+  res.status(404).json({ 
+    message: 'Route not found', 
+    path: req.url,
+    method: req.method,
+    tip: 'Did you mean /register or /login?'
+  });
+});
+
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
