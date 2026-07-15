@@ -21,7 +21,8 @@ const UserSchema = new mongoose.Schema({
   password: String,
   account_number: { type: String, unique: true }, // ADD THIS ON LINE 22
   wallet_balance: { type: Number, default: 1000.00 },
-  created_at: { type: Date, default: Date.now }
+  created_at: { type: Date, default: Date.now },
+  transactionPin: { type: String }
 });
 
 
@@ -105,6 +106,24 @@ app.post('/login', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+//// SET TRANSACTION PIN
+app.post('/set-pin', auth, async (req, res) => {
+  try {
+    const { pin } = req.body;
+    const userId = req.user.id;
+
+    if (!pin || pin.length !== 4 || isNaN(pin)) {
+      return res.status(400).json({ error: "PIN must be 4 digits" });
+    }
+
+    const hashedPin = await bcrypt.hash(pin, 10);
+    await User.findByIdAndUpdate(userId, { transactionPin: hashedPin });
+
+    res.json({ message: "Transaction PIN set successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // BALANCE - SECURE
 app.get('/balance', auth, async (req, res) => {
@@ -122,27 +141,29 @@ app.get('/balance', auth, async (req, res) => {
 // SEND MONEY ROUTE
 app.post('/send', auth, async (req, res) => {
   try {
-    const { toAccountNumber, amount } = req.body;
-    
-   const sender = await User.findById(req.user);
+    const { toAccountNumber, amount, pin } = req.body; // 1. ADD pin HERE
+
+    const sender = await User.findById(req.user.id); // 2. FIX: use req.user.id not req.user
     const receiver = await User.findOne({ account_number: toAccountNumber });
-    
+
     if (!receiver) return res.status(404).json({ error: "Account number not found" });
     if (amount <= 0) return res.status(400).json({ error: "Amount must be greater than 0" });
     if (sender.wallet_balance < amount) return res.status(400).json({ error: "Insufficient balance" });
     if (sender._id.equals(receiver._id)) return res.status(400).json({ error: "Cannot send to yourself" });
-    
+
+    // 3. PIN CHECK - ADD THESE 3 LINES
+    if (!sender.transactionPin) return res.status(400).json({ error: "Please set transaction PIN first" });
+    const isPinValid = await bcrypt.compare(pin, sender.transactionPin);
+    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
+
     // Transfer
     sender.wallet_balance -= amount;
     receiver.wallet_balance += amount;
-    
+
     await sender.save();
     await receiver.save();
-    
-    res.json({ 
-      message: `Sent ₦${amount} to ${receiver.name}`, 
-      yourNewBalance: sender.wallet_balance 
-    });
+
+    res.json({ message: "Transfer successful", newBalance: sender.wallet_balance });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
