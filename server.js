@@ -138,28 +138,27 @@ app.get('/balance', auth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-// SEND MONEY ROUTE
 app.post('/send', auth, async (req, res) => {
   try {
-    const { toAccountNumber, amount, pin } = req.body; // 1. ADD pin HERE
+    const { toAccountNumber, amount, pin } = req.body;
 
-    const sender = await User.findById(req.user.id); // 2. FIX: use req.user.id not req.user
+    const sender = await User.findById(req.user.id);
     const receiver = await User.findOne({ account_number: toAccountNumber });
 
-    if (!receiver) return res.status(404).json({ error: "Account number not found" });
+    console.log("Sender:", sender?.email);  // Check terminal
+    console.log("Receiver:", receiver?.email); // Check terminal
+
+    if (!sender) return res.status(404).json({ error: "Sender not found. Token invalid." });
+    if (!receiver) return res.status(404).json({ error: "Receiver account number not found" });
     if (amount <= 0) return res.status(400).json({ error: "Amount must be greater than 0" });
     if (sender.wallet_balance < amount) return res.status(400).json({ error: "Insufficient balance" });
     if (sender._id.equals(receiver._id)) return res.status(400).json({ error: "Cannot send to yourself" });
 
-    // 3. PIN CHECK - ADD THESE 3 LINES
-    if (!sender.transactionPin) return res.status(400).json({ error: "Please set transaction PIN first" });
     const isPinValid = await bcrypt.compare(pin, sender.transactionPin);
     if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
 
-    // Transfer
     sender.wallet_balance -= amount;
     receiver.wallet_balance += amount;
-
     await sender.save();
     await receiver.save();
 
