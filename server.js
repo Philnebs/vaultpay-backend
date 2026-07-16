@@ -282,16 +282,22 @@ app.post('/verify-account', auth, async (req, res) => {
 // 2. SEND MONEY TO ANY BANK
 app.post('/bank-transfer', auth, async (req, res) => {
   try {
-    const { bank_code, account_number, amount, narration } = req.body;
+    const { bank_code, account_number, amount, narration,pin } = req.body;
 
-    if (!account_number || !bank_code || !amount) 
-      return res.status(400).json({ error: "account_number, bank_code and amount are required" });
+    if (!account_number || !bank_code || !amount || !pin)
+      return res.status(400).json({ error: "account_number, bank_code and amount and pin are required" });
 
     const user = await User.findById(req.user._id);
 
     if (user.wallet_balance < amount) 
       return res.status(400).json({ error: "Insufficient funds" });
+// VERIFY PIN
+const isPinValid = await bcrypt.compare(pin, user.transactionPin);
+if (!isPinValid) return res.status(401).json({ error: "Invalid Transaction PIN" });
 
+// CHECK BALANCE - moved here after pin check
+if (user.wallet_balance < amount) 
+  return res.status(400).json({ error: "Insufficient funds" });
     // Step 1: Verify account with Flutterwave first
     const verifyPayload = { 
       account_number: account_number, 
