@@ -142,7 +142,7 @@ app.post('/send', auth, async (req, res) => {
   try {
     const { toAccountNumber, amount, pin } = req.body;
 
-    const sender = await User.findById(req.user.id);
+    const sender = await User.findById(req.user._id);
     const receiver = await User.findOne({ account_number: toAccountNumber });
 
     console.log("Sender:", sender?.email);  // Check terminal
