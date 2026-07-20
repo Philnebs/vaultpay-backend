@@ -288,7 +288,7 @@ app.post('/bank-transfer', auth, async (req, res) => {
       return res.status(400).json({ error: "account_number, bank_code and amount and pin are required" });
 
     const user = await User.findById(req.user._id);
-
+console.log(user)
     if (user.wallet_balance < amount) 
       return res.status(400).json({ error: "Insufficient funds" });
 // VERIFY PIN
