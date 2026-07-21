@@ -1,491 +1,167 @@
-const express = require('express');
-const mongoose = require('mongoose');
-require('dotenv').config();
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
+const express = require("express");
+const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const cors = require("cors");
+const axios = require("axios");
+require("dotenv").config();
 
 const app = express();
-const JWT_SECRET = process.env.JWT_SECRET;
 app.use(express.json());
+app.use(cors());
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('✅ Connected to MongoDB'))
-  .catch(err => console.log('❌ Mongo Error:', err));
+const JWT_SECRET = process.env.JWT_SECRET || "vaultpay_secret_2026";
+const FLW_SECRET = process.env.FLUTTERWAVE_SECRET_KEY;
 
-// User Schema
-const UserSchema = new mongoose.Schema({
+// ========== FUNCTION TO GENERATE 10 DIGIT ACCOUNT NUMBER ==========
+const generateAccountNumber = () => {
+  // Generates random 10 digit number starting with 069
+  return "069" + Math.floor(1000000 + Math.random() * 9000000).toString();
+};
+
+// ========== 3. DATABASE MODEL ==========
+const User = mongoose.model("User", new mongoose.Schema({
   name: String,
   email: { type: String, unique: true },
-  phone: String,
   password: String,
-  account_number: { type: String, unique: true }, // ADD THIS ON LINE 22
-  wallet_balance: { type: Number, default: 1000.00 },
-  created_at: { type: Date, default: Date.now },
-  transactionPin: { type: String }
-});
+  phone: String,
+  accountNumber: { type: String, unique: true }, // ADDED: 10 digit account number
+  balance: { type: Number, default: 5000 },
+  transactionPin: String,
+}));
 
-
-const User = mongoose.model('User', UserSchema);
-// Transaction Model
-const transactionSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['credit', 'debit'], required: true },
-  amount: { type: Number, required: true },
-  description: { type: String, required: true },
-  reference: { type: String, unique: true },
-  status: { type: String, default: 'successful' },
-  recipient: { type: String }, // account name or phone
-  date: { type: Date, default: Date.now }
-});
-
-const Transaction = mongoose.model('Transaction', transactionSchema);
-
-// AUTH MIDDLEWARE
+// ========== 4. AUTH MIDDLEWARE ==========
 const auth = async (req, res, next) => {
   try {
-    const token = req.header('Authorization');
-    if (!token) return res.status(401).json({ error: "No token, access denied" });
-
-    const decoded = jwt.verify(token.replace('Bearer ', ''), process.env.JWT_SECRET);
-    req.user = decoded.id;
+    const token = req.header("Authorization")?.replace("Bearer ", "");
+    if (!token) return res.status(401).json({ error: "No token" });
+    
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = { id: decoded.id };
+    
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(401).json({ error: "User not found" });
+    
+    req.userData = user;
     next();
-  } catch (err) {
-    res.status(401).json({ error: "Token is not valid" });
+  } catch (e) {
+    res.status(401).json({ error: "Invalid token" });
   }
 };
 
-//// REGISTER
-app.post('/register', async (req, res) => {
+// ========== 5. ROUTES ==========
+
+// REGISTER - NOW GENERATES ACCOUNT NUMBER
+app.post("/register", async (req, res) => {
   try {
-    const { name, email, phone, password } = req.body;
-
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const { name, email, password, phone } = req.body;
+    const hashed = await bcrypt.hash(password, 10);
     
-    // Generate 10 digit account number
-    const account_number = Math.floor(1000000 + Math.random() * 9000000).toString();
+    let accountNumber;
+    let userExists = true;
+    // Loop until we get a unique account number
+    while(userExists){
+      accountNumber = generateAccountNumber();
+      userExists = await User.findOne({ accountNumber });
+    }
 
-    const user = new User({ name, email, phone, password: hashedPassword, account_number, wallet_balance: 1000 });
-    await user.save();
-
-    const { password: _, ...userWithoutPassword } = user.toObject();
-
-    // Generate token
-    const token = jwt.sign(
-      { id: user._id }, 
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-
-    res.status(201).json({ 
-      message: "User created", 
-      token: token,
-      user: userWithoutPassword 
+    const user = await User.create({ 
+      name, 
+      email, 
+      password: hashed, 
+      phone,
+      accountNumber // Save the 10 digit number
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    
+    res.json({ 
+      message: "User created successfully",
+      accountNumber: user.accountNumber, // Return it to user
+      balance: user.balance
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// LOGIN
-app.post('/login', async (req, res) => {
+app.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
-    
     const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ error: "User not found" });
-    
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ error: "Wrong password" });
+    if (!user || !await bcrypt.compare(password, user.password))
+      return res.status(400).json({ error: "Invalid login" });
     
     const token = jwt.sign({ id: user._id.toString() }, JWT_SECRET, { expiresIn: "7d" });
-    
-    const { password: _, ...userWithoutPassword } = user.toObject();
-    res.json({ message: "Login successful", token, user: userWithoutPassword });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.json({ token, accountNumber: user.accountNumber }); // Return account number on login too
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
-//// SET TRANSACTION PIN
-app.post('/set-pin', auth, async (req, res) => {
+
+app.post("/set-pin", auth, async (req, res) => {
   try {
     const { pin } = req.body;
-    const userId = req.user.id;
-
-    if (!pin || pin.length !== 4 || isNaN(pin)) {
-      return res.status(400).json({ error: "PIN must be 4 digits" });
-    }
-
     const hashedPin = await bcrypt.hash(pin, 10);
-    await User.findByIdAndUpdate(userId, { transactionPin: hashedPin });
-
-    res.json({ message: "Transaction PIN set successfully" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    await User.findByIdAndUpdate(req.user.id, { transactionPin: hashedPin });
+    res.json({ message: "PIN set successfully" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// BALANCE - SECURE
-app.get('/balance', auth, async (req, res) => {
+// BANK TRANSFER - NOW CAN SEND TO WALLET OR BANK
+app.post("/bank-transfer", auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-    res.json({ 
-      name: user.name,
-      account_number: user.account_number,
-      balance: user.wallet_balance 
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-app.post('/send', auth, async (req, res) => {
-  try {
-    const { toAccountNumber, amount, pin } = req.body;
-
-    const sender = await User.findById(req.user._id);
-    const receiver = await User.findOne({ account_number: toAccountNumber });
-
-    console.log("Sender:", sender?.email);  // Check terminal
-    console.log("Receiver:", receiver?.email); // Check terminal
-
-    if (!sender) return res.status(404).json({ error: "Sender not found. Token invalid." });
-    if (!receiver) return res.status(404).json({ error: "Receiver account number not found" });
-    if (amount <= 0) return res.status(400).json({ error: "Amount must be greater than 0" });
-    if (sender.wallet_balance < amount) return res.status(400).json({ error: "Insufficient balance" });
-    if (sender._id.equals(receiver._id)) return res.status(400).json({ error: "Cannot send to yourself" });
-
-    const isPinValid = await bcrypt.compare(pin, sender.transactionPin);
-    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
-
-    sender.wallet_balance -= amount;
-    receiver.wallet_balance += amount;
-    await sender.save();
-    await receiver.save();
-
-    res.json({ message: "Transfer successful", newBalance: sender.wallet_balance });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-// DEPOSIT MONEY ROUTE - NEW WITH FLUTTERWAVE
-app.post('/deposit', auth, async (req, res) => {
-  try {
-    const { amount } = req.body;
-    const user = await User.findById(req.user);
-
-    if (amount <= 0) return res.status(400).json({ error: "Amount must be greater than 0" });
-
-    const tx_ref = `VTP_FUND_${Date.now()}`;
-
-    const payload = {
-      tx_ref: tx_ref,
-      amount: amount,
-      currency: "NGN",
-      redirect_url: "https://swiftpay-backend-v2.onrender.com/payment-success", // you can change this later
-      customer: {
-        email: user.email,
-        name: user.fullName
-      },
-      meta: {
-        userId: user._id.toString() // IMPORTANT: so webhook knows who to credit
-      },
-      customizations: {
-        title: "VaultPay Wallet Funding",
-        description: `Fund wallet with ${amount}`
-      }
-    };
-
-    const response = await axios.post(
-      'https://api.flutterwave.com/v3/payments',
-      payload,
-      { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` } }
-    );
-
-    res.status(200).json({ 
-      message: 'Payment link created',
-      payment_link: response.data.data.link 
-    });
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-
-// WITHDRAW MONEY ROUTE
-app.post('/withdraw', auth, async (req, res) => {
-  try {
-    const { amount } = req.body;
-    const user = await User.findById(req.user);
-
-    if (amount <= 0) return res.status(400).json({ error: "Amount must be greater than 0" });
-    if (user.wallet_balance < amount) return res.status(400).json({ error: "Insufficient funds" });
-
-    user.wallet_balance -= amount;
-    await user.save();
-
-    res.json({
-      message: `Withdrew ₦${amount} successfully`,
-      newBalance: user.wallet_balance
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-const axios = require('axios');
-const FLW_SECRET_KEY = process.env.FLW_SECRET_KEY;
-
-// 1. GET ALL NIGERIAN BANKS
-app.get('/banks', async (req, res) => {
-  try {
-    const response = await axios.get('https://api.flutterwave.com/v3/banks/NG', {
-      headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` }
-    });
-    res.json(response.data); // returns list of banks + codes
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-// 3. VERIFY ACCOUNT NAME BEFORE TRANSFER
-app.post('/verify-account', auth, async (req, res) => {
-  try {
-    const { account_number, bank_code } = req.body;
-
-    if (!account_number || !bank_code) 
-      return res.status(400).json({ error: "account_number and bank_code are required" });
-
-    const payload = {
-      account_number: account_number,
-      account_bank: bank_code
-    };
-
-    const flwResponse = await axios.post(
-      'https://api.flutterwave.com/v3/accounts/resolve', 
-      payload,
-      {
-        headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` }
-      }
-    );
-
-    res.json({
-      message: "Account verified",
-      account_name: flwResponse.data.data.account_name
-    });
-
-  } catch (err) {
-    res.status(400).json({ 
-      error: err.response?.data?.message || "Account not found" 
-    });
-  }
-});
-// 2. SEND MONEY TO ANY BANK
-app.post('/bank-transfer', auth, async (req, res) => {
-  try {
- 
-    const { bank_code, account_number, amount, narration,pin } = req.body;
-
-    if (!account_number || !bank_code || !amount || !pin)
-      return res.status(400).json({ error: "account_number, bank_code and amount and pin are required" });
-    // LINE 290 - ADD THIS
-const allUsers = await User.find({});
-console.log("DEBUG ALL USERS IN DB:", allUsers.map(u => u._id.toString()));
-
-console.log("DEBUG req.user:", req.user);
-const user = await User.findById(req.user.id);
-console.log("DEBUG USER:", user);
-
-if (!user) {
-  return res.status(404).json({ error: "User not found. Token might be invalid" });
-}
-      if (!user.transactionPin) {
-  return res.status(400).json({ error: "Please set your transaction PIN first" });
-}
-// VERIFY PIN
-const isPinValid = await bcrypt.compare(pin, user.transactionPin);
-if (!isPinValid) return res.status(401).json({ error: "Invalid Transaction PIN" });
-
-// CHECK BALANCE - moved here after pin check
-if (user.wallet_balance < amount) 
-  return res.status(400).json({ error: "Insufficient funds" });
-    // Step 1: Verify account with Flutterwave first
-    const verifyPayload = { 
-      account_number: account_number, 
-      account_bank: bank_code 
-    };
-    const verifyResponse = await axios.post(
-      'https://api.flutterwave.com/v3/accounts/resolve',
-      verifyPayload,
-      { headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` } }
-    );
-    const account_name = verifyResponse.data.data.account_name;
-
-    // Step 2: Deduct from VaultPay wallet
-    user.wallet_balance -= amount;
-    await user.save();
-    // Step 2.5: Save Transaction to History
-    const newTransaction = new Transaction({
-      userId: user._id,
-      type: 'debit',
-      amount: amount,
-      description: `Transfer to ${account_name}`,
-      reference: `VTP_${Date.now()}`,
-      recipient: account_name
-    });
-    await newTransaction.save();
-
-    // Step 3: Tell Flutterwave to send the money
-    const transferPayload = {
-      account_bank: bank_code,
-      account_number: account_number,
-      amount: amount,
-      narration: narration || `VaultPay transfer to ${account_name}`,
-      currency: "NGN",
-      reference: `VTP_${Date.now()}`,
-      beneficiary_name: account_name
-    };
-
-    const flwResponse = await axios.post(
-      'https://api.flutterwave.com/v3/transfers',
-      transferPayload,
-      { headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` }
-  });
-
-    res.json({
-      message: "Transfer successful",
-      account_name: account_name,
-      flutterwave_response: flwResponse.data,
-      newBalance: user.wallet_balance
-    });
-
-  } catch (err) {
-    res.status(500).json({ error: err.response?.data || err.message });
-  }
-});
-   const PORT = 5000; // change from 3000 to 5000
-   // 5. GET TRANSACTION HISTORY
-app.get('/transactions', auth, async (req, res) => {
-  try {
-    const transactions = await Transaction.find({ userId: req.user })
-      .sort({ date: -1 }) // newest first
-      .limit(20); // last 20 transactions
-
-    res.json({
-      message: "Transaction history",
-      count: transactions.length,
-      transactions: transactions
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-// 6. BUY AIRTIME, DATA, BILLS
-app.post('/bills', auth, async (req, res) => {
-  try {
-    const { type, biller_code, item_code, amount, phone } = req.body;
-    // type: 'airtime', 'data', 'dstv', 'gotv', 'jamb'
-    // biller_code: 'MTN', 'GLO', 'DSTV'
-    // item_code: 'mtn-10' for 10 naira airtime, 'dstv-padi' for padi package
-
-    const user = await User.findById(req.user);
-    if (user.wallet_balance < amount) {
-      return res.status(400).json({ message: 'Insufficient balance' });
-    }
-
-    // Step 1: Deduct from VaultPay wallet first
-    user.wallet_balance -= amount;
-    await user.save();
-
-    // Step 2: Call Flutterwave to buy the bill
-    const billPayload = {
-      country: "NG",
-      customer: phone,
-      amount: amount,
-      type: type, // airtime, data, dstv, jamb
-      reference: `VTP_BILL_${Date.now()}`,
-      biller_code: biller_code,
-      item_code: item_code
-    };
-
-    const billResponse = await axios.post(
-      'https://api.flutterwave.com/v3/bills',
-      billPayload,
-      { headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` }
-  });
-
-    // Step 3: Save to Transaction History
-    const newTransaction = new Transaction({
-      userId: user._id,
-      type: 'debit',
-      amount: amount,
-      description: `${type.toUpperCase()} - ${biller_code} - ${phone}`,
-      reference: billPayload.reference,
-      recipient: phone,
-      status: billResponse.data.status === 'success' ? 'successful' : 'pending'
-    });
-    await newTransaction.save();
-
-    res.status(200).json({
-      message: `${type} purchase successful`,
-      data: billResponse.data
-    });
-} catch (err) {
-  console.log("FLUTTERWAVE ERROR:",err.response.data); // <-- add this
-  res.status(500).json({ error: err.response.data });
-}
-});
-// FLUTTERWAVE WEBHOOK ROUTE
-app.post('/api/webhook', async (req, res) => {
-  try {
-    // 1. Verify it’s from Flutterwave
-    const secretHash = process.env.FLW_SECRET_HASH;
-    const signature = req.headers["verif-hash"];
+    const { account_number, bank_code, amount, pin, description } = req.body;
     
-    if (!signature || signature !== secretHash) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
+    if (!account_number || !amount || !pin)
+      return res.status(400).json({ error: "account_number, amount and pin are required" });
 
-    const payload = req.body;
-    console.log("WEBHOOK RECEIVED:", payload.tx_ref);
+    const user = req.userData;
+    
+    const validPin = await bcrypt.compare(pin, user.transactionPin);
+    if (!validPin) return res.status(400).json({ error: "Invalid Transaction PIN" });
+    if (user.balance < amount) return res.status(400).json({ error: "Insufficient balance" });
 
-    // 2. Only process successful wallet funding
-    if (payload.status === "successful" && payload.tx_ref.startsWith("VTP_FUND_")) {
-      const userId = payload.meta.userId;
-      const amount = payload.amount;
+    // IF bank_code is provided, it's external bank. If not, it's wallet to wallet
+    if(bank_code){
+      // EXTERNAL BANK TRANSFER VIA FLUTTERWAVE
+      const flwResponse = await axios.post(
+        "https://api.flutterwave.com/v3/transfers",
+        {
+          account_bank: bank_code,
+          account_number: account_number,
+          amount: amount,
+          narration: description || "VaultPay Transfer",
+          currency: "NGN",
+          reference: `VP_${Date.now()}`
+        },
+        { headers: { Authorization: `Bearer ${FLW_SECRET}` } }
+      );
 
-      // 3. Credit user wallet
-      const user = await User.findById(userId);
-      user.wallet_balance += amount;
+      if(flwResponse.data.status === "success"){
+        user.balance -= amount;
+        await user.save();
+        return res.json({ message: "Bank transfer successful", new_balance: user.balance });
+      } else {
+        return res.status(400).json({ error: flwResponse.data.message });
+      }
+    } else {
+      // WALLET TO WALLET TRANSFER - Find user by accountNumber
+      const receiver = await User.findOne({ accountNumber: account_number });
+      if(!receiver) return res.status(400).json({ error: "Receiver account not found" });
+      
+      user.balance -= amount;
+      receiver.balance += amount;
       await user.save();
-
-      // 4. Save transaction
-      const newTransaction = new Transaction({
-        userId: user._id,
-        type: 'credit',
-        amount: amount,
-        description: 'Wallet Funding',
-        reference: payload.tx_ref,
-        status: 'success'
-      });
-      await newTransaction.save();
+      await receiver.save();
+      return res.json({ message: "Wallet transfer successful", new_balance: user.balance });
     }
-    
-    res.status(200).send("OK"); // MUST return 200
-  } catch (err) {
-    console.log("WEBHOOK ERROR:", err.message);
-    res.status(500).json({ error: err.message });
+
+  } catch (e) {
+    console.log("ERROR:", e.response?.data || e.message);
+    res.status(500).json({ error: e.response?.data?.message || "Transfer failed" });
   }
 });
-// 404 HANDLER - tells us what route was not found
-app.use((req, res) => {
-  console.log(`404: ${req.method} ${req.url}`); // this will show in Render logs
-  res.status(404).json({ 
-    message: 'Route not found', 
-    path: req.url,
-    method: req.method,
-    tip: 'Did you mean /register or /login?'
-  });
-});
 
-
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+mongoose.connect(process.env.MONGO_URI)
+.then(() => app.listen(process.env.PORT || 5000, () => console.log("Server running")));
