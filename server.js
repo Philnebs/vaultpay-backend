@@ -282,12 +282,15 @@ app.post('/verify-account', auth, async (req, res) => {
 // 2. SEND MONEY TO ANY BANK
 app.post('/bank-transfer', auth, async (req, res) => {
   try {
+    if (!user.transactionPin) {
+  return res.status(400).json({ error: "Please set your transaction PIN first" });
+}
     const { bank_code, account_number, amount, narration,pin } = req.body;
 
     if (!account_number || !bank_code || !amount || !pin)
       return res.status(400).json({ error: "account_number, bank_code and amount and pin are required" });
 console.log("DEBUG req.user:", req.user);
-const user = await User.findById(req.user);
+const user = await User.findById(req.user.id);
 console.log("DEBUG USER:", user);
 
 if (!user) {
