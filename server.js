@@ -282,9 +282,7 @@ app.post('/verify-account', auth, async (req, res) => {
 // 2. SEND MONEY TO ANY BANK
 app.post('/bank-transfer', auth, async (req, res) => {
   try {
-    if (!user.transactionPin) {
-  return res.status(400).json({ error: "Please set your transaction PIN first" });
-}
+ 
     const { bank_code, account_number, amount, narration,pin } = req.body;
 
     if (!account_number || !bank_code || !amount || !pin)
@@ -296,7 +294,9 @@ console.log("DEBUG USER:", user);
 if (!user) {
   return res.status(404).json({ error: "User not found. Token might be invalid" });
 }
-   
+      if (!user.transactionPin) {
+  return res.status(400).json({ error: "Please set your transaction PIN first" });
+}
 // VERIFY PIN
 const isPinValid = await bcrypt.compare(pin, user.transactionPin);
 if (!isPinValid) return res.status(401).json({ error: "Invalid Transaction PIN" });
