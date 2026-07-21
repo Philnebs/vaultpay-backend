@@ -287,10 +287,13 @@ app.post('/bank-transfer', auth, async (req, res) => {
     if (!account_number || !bank_code || !amount || !pin)
       return res.status(400).json({ error: "account_number, bank_code and amount and pin are required" });
 
-    const user = await User.findById(req.user._id);
-console.log(user)
-    if (user.wallet_balance < amount) 
-      return res.status(400).json({ error: "Insufficient funds" });
+const user = await User.findById(req.user._id);
+console.log("DEBUG USER:", user);
+
+if (!user) {
+  return res.status(404).json({ error: "User not found. Token might be invalid" });
+}
+   
 // VERIFY PIN
 const isPinValid = await bcrypt.compare(pin, user.transactionPin);
 if (!isPinValid) return res.status(401).json({ error: "Invalid Transaction PIN" });
