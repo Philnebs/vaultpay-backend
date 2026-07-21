@@ -287,6 +287,10 @@ app.post('/bank-transfer', auth, async (req, res) => {
 
     if (!account_number || !bank_code || !amount || !pin)
       return res.status(400).json({ error: "account_number, bank_code and amount and pin are required" });
+    // LINE 290 - ADD THIS
+const allUsers = await User.find({});
+console.log("DEBUG ALL USERS IN DB:", allUsers.map(u => u._id.toString()));
+
 console.log("DEBUG req.user:", req.user);
 const user = await User.findById(req.user.id);
 console.log("DEBUG USER:", user);
