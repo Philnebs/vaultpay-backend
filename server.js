@@ -541,6 +541,59 @@ app.post('/bills/pay', auth, async (req, res) => {
   }
 });
 
+// FLUTTERWAVE DEPOSIT WEBHOOK HANDLER
+app.post('/deposit-webhook', async (req, res) => {
+  try {
+    // 1. Always acknowledge the webhook immediately so Flutterwave doesn't keep retrying
+    res.status(200).send("Webhook received");
+
+    const event = req.body;
+
+    // 2. Look specifically for successful charge events (deposits)
+    if (event['event.type'] === 'CHARGE.SUCCESSFUL') {
+      const paymentData = event.data;
+      const amount = paymentData.amount;
+      const status = paymentData.status;
+      
+      // Extract the userId we passed inside the 'meta' field during deposit initiation
+      const userId = paymentData.meta?.userId; 
+      const reference = paymentData.tx_ref;
+
+      if (!userId) return console.log("⚠️ Webhook ignored: No userId found in metadata.");
+
+      // 3. Prevent duplicate funding by checking if this transaction reference was already processed
+      const existingTx = await Transaction.findOne({ reference: reference });
+      if (existingTx) return console.log(`⚠️ Reference ${reference} already processed.`);
+
+      // 4. If the payment status is successful, find the user and add the money
+      if (status === 'successful') {
+        const user = await User.findById(userId);
+        if (!user) return console.log(`❌ User with ID ${userId} not found.`);
+
+        // Add deposit amount to their app wallet balance
+        user.wallet_balance += Number(amount);
+        await user.save();
+
+        // 5. Log the deposit into your MongoDB transaction history
+        const depositTransaction = new Transaction({
+          userId: user._id,
+          type: 'credit', // Marked as a credit since money is entering the wallet
+          amount: Number(amount),
+          description: "Wallet Funding via Flutterwave",
+          reference: reference,
+          status: 'successful',
+          recipient: user.account_number
+        });
+        await depositTransaction.save();
+
+        console.log(`✅ Successfully funded ₦${amount} to user account: ${user.email}`);
+      }
+    }
+  } catch (err) {
+    console.error("❌ Deposit Webhook Error:", err.message);
+  }
+});
+
 // Start Server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
