@@ -144,6 +144,26 @@ app.get('/balance', auth, async (req, res) => {
   }
 });
 
+// GET USER TRANSACTION HISTORY
+app.get('/transactions', auth, async (req, res) => {
+  try {
+    // 1. Fetch transactions belonging to the logged-in user
+    // 2. sort({ date: -1 }) ensures the newest transactions appear first
+    const history = await Transaction.find({ userId: req.user.id })
+      .sort({ date: -1 });
+
+    // 3. Return the array back to the frontend app
+    res.json({
+      success: true,
+      count: history.length,
+      transactions: history
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // TRANSFER TO REAL BANK ACCOUNTS VIA FLUTTERWAVE
 app.post('/send', auth, async (req, res) => {
   try {
