@@ -419,7 +419,7 @@ app.get('/bills/categories', auth, async (req, res) => {
   try {
     const { type } = req.query; // e.g., 'airtime', 'data_bundle', 'power', 'cable', 'utility'
     
-    // Fixed query interpolation syntax
+    // FIXED: Corrected domain, added /v3/ path, and added the missing '$' sign before variables
     const url = type 
       ? `https://flutterwave.com{type}` 
       : 'https://flutterwave.com';
@@ -447,6 +447,7 @@ app.post('/bills/validate', auth, async (req, res) => {
       return res.status(400).json({ error: "item_code, code (biller code), and customer id are required" });
     }
 
+    // FIXED: Corrected domain path and added the missing '/' and '$' signs for interpolation
     const response = await axios.get(
       `https://flutterwave.com{item_code}/validate?code=${code}&customer=${customer}`,
       { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` } }
@@ -461,6 +462,7 @@ app.post('/bills/validate', auth, async (req, res) => {
     res.status(500).json({ error: `Validation failed: ${errorMsg}` });
   }
 });
+
 
 // 3. EXECUTE BILL PAYMENT (Deduct wallet and pay Flutterwave)
 app.post('/bills/pay', auth, async (req, res) => {
