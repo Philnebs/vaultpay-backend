@@ -379,6 +379,41 @@ app.get('/profile', auth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// CHANGE PASSWORD ROUTE
+app.post('/change-password', auth, async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+
+    // 1. Basic input validation
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: "Both old and new passwords are required" });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: "New password must be at least 6 characters long" });
+    }
+
+    // 2. Fetch the user with their password from the database
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // 3. Verify that the old password matches what is in the database
+    const isMatch = await bcrypt.compare(oldPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ error: "Incorrect current password" });
+    }
+
+    // 4. Hash the new password and update the user document
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+    await user.save();
+
+    res.json({ success: true, message: "Password updated successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Start Server
 const PORT = process.env.PORT || 5000;
