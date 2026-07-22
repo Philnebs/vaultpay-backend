@@ -359,6 +359,26 @@ app.post('/verify-account', auth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// GET CURRENT LOGGED-IN USER PROFILE
+app.get('/profile', auth, async (req, res) => {
+  try {
+    // 1. Fetch user data using the ID extracted by the auth middleware
+    // 2. select('-password') ensures the hashed password is NEVER exposed to the frontend
+    const user = await User.findById(req.user.id).select('-password');
+    
+    if (!user) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    // 3. Return clean user details back to your app
+    res.json({
+      success: true,
+      user: user
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Start Server
 const PORT = process.env.PORT || 5000;
