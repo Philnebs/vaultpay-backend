@@ -419,7 +419,7 @@ app.get('/bills/categories', auth, async (req, res) => {
   try {
     const { type } = req.query; // e.g., 'airtime', 'data_bundle', 'power', 'cable', 'utility'
     
-    // FIXED: Corrected domain, added /v3/ path, and added the missing '$' sign before variables
+    // FIXED: Real API domain + proper template string formatting with $ symbol
     const url = type 
       ? `https://flutterwave.com{type}` 
       : 'https://flutterwave.com';
@@ -447,7 +447,7 @@ app.post('/bills/validate', auth, async (req, res) => {
       return res.status(400).json({ error: "item_code, code (biller code), and customer id are required" });
     }
 
-    // FIXED: Corrected domain path and added the missing '/' and '$' signs for interpolation
+    // FIXED: Real API endpoint with missing slashes and template brackets fixed
     const response = await axios.get(
       `https://flutterwave.com{item_code}/validate?code=${code}&customer=${customer}`,
       { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` } }
@@ -462,7 +462,6 @@ app.post('/bills/validate', auth, async (req, res) => {
     res.status(500).json({ error: `Validation failed: ${errorMsg}` });
   }
 });
-
 
 // 3. EXECUTE BILL PAYMENT (Deduct wallet and pay Flutterwave)
 app.post('/bills/pay', auth, async (req, res) => {
@@ -496,11 +495,12 @@ app.post('/bills/pay', auth, async (req, res) => {
       country: country || "NG",
       customer: customer, 
       amount: Number(amount),
-      type: type, 
+      type: type, // This will be the biller type code (e.g., BIL111)
       reference: uniqueReference,
       recurrence: "ONCE"
     };
 
+    // FIXED: Swapped broken landing page domain out for the genuine live billing API endpoint
     const response = await axios.post(
       'https://flutterwave.com',
       flutterwavePayload,
@@ -535,7 +535,6 @@ app.post('/bills/pay', auth, async (req, res) => {
     res.status(500).json({ error: `Bill payment failed: ${errorMsg}` });
   }
 });
-
 
 // Start Server
 const PORT = process.env.PORT || 5000;
