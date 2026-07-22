@@ -144,34 +144,86 @@ app.get('/balance', auth, async (req, res) => {
   }
 });
 
-// TRANSFER ROUTE (FIXED)
+// TRANSFER TO REAL BANK ACCOUNTS VIA FLUTTERWAVE
 app.post('/send', auth, async (req, res) => {
   try {
-    // FIX: Extracted account_number to match your JSON payload key
-    const { account_number, amount, pin } = req.body; 
+    const { account_number, bank_code, amount, pin, description } = req.body;
 
-    // FIX: Changed req.user._id to req.user.id to align with middleware structure
-    const sender = await User.findById(req.user.id); 
-    const receiver = await User.findOne({ account_number: account_number });
+    // 1. Basic validation
+    if (!account_number || !bank_code || !amount || !pin) {
+      return res.status(400).json({ error: "Missing required transfer fields" });
+    }
+    if (amount <= 0) {
+      return res.status(400).json({ error: "Amount must be greater than 0" });
+    }
 
-    if (!sender) return res.status(404).json({ error: "User not found. Token might be invalid" });
-    if (!receiver) return res.status(404).json({ error: "Receiver account number not found" });
-    if (amount <= 0) return res.status(400).json({ error: "Amount must be greater than 0" });
-    if (sender.wallet_balance < amount) return res.status(400).json({ error: "Insufficient balance" });
-    if (sender._id.equals(receiver._id)) return res.status(400).json({ error: "Cannot send to yourself" });
+    // 2. Fetch the sender inside your system
+    const sender = await User.findById(req.user.id);
+    if (!sender) {
+      return res.status(404).json({ error: "Sender profile not found" });
+    }
 
+    // 3. Verify sender's security PIN
     const isPinValid = await bcrypt.compare(pin, sender.transactionPin);
-    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
+    if (!isPinValid) {
+      return res.status(400).json({ error: "Invalid transaction PIN" });
+    }
 
+    // 4. Verify sender has enough funds inside your app balance
+    if (sender.wallet_balance < amount) {
+      return res.status(400).json({ error: "Insufficient wallet balance" });
+    }
+
+    // 5. Generate a unique transaction reference for tracking
+    const uniqueReference = `VTP_TX_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+    // 6. Build the payload for the Flutterwave Payout API Engine
+    const flutterwavePayload = {
+      account_bank: bank_code,
+      account_number: account_number,
+      amount: Number(amount),
+      narration: description || "VaultPay Transfer",
+      currency: "NGN",
+      reference: uniqueReference,
+      callback_url: "https://onrender.com" // Adjust as needed
+    };
+
+    // 7. Make the live API Call to Flutterwave to execute the transfer
+    const response = await axios.post(
+      'https://flutterwave.com',
+      flutterwavePayload,
+      {
+        headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
+      }
+    );
+
+    // 8. Deduct the funds from the user's wallet balance if API call is successful
     sender.wallet_balance -= amount;
-    receiver.wallet_balance += amount;
-    
     await sender.save();
-    await receiver.save();
 
-    res.json({ message: "Transfer successful", newBalance: sender.wallet_balance });
+    // 9. Save log details to your MongoDB transaction collection
+    const newTransaction = new Transaction({
+      userId: sender._id,
+      type: 'debit',
+      amount: amount,
+      description: description || "Bank Transfer",
+      reference: uniqueReference,
+      status: response.data.status === "success" ? 'successful' : 'pending',
+      recipient: `${account_number} (${bank_code})`
+    });
+    await newTransaction.save();
+
+    // 10. Return final updated data back to your frontend
+    res.json({
+      message: "Transfer initiated successfully",
+      newBalance: sender.wallet_balance,
+      transferDetails: response.data.data
+    });
+
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // Graceful error logging to catch invalid bank details or upstream server issues
+    const errorMessage = err.response?.data?.message || err.message;
+    res.status(500).json({ error: `Transfer failed: ${errorMessage}` });
   }
 });
 
