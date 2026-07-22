@@ -414,6 +414,126 @@ app.post('/change-password', auth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// 1. FETCH AVAILABLE BILLS (DSTV, GOTV, ELECTRICITY, WAEC, JAMB)
+app.get('/bills/categories', auth, async (req, res) => {
+  try {
+    const { type } = req.query; // e.g., 'airtime', 'data_bundle', 'power', 'cable', 'utility'
+    
+    // Fixed query interpolation syntax
+    const url = type 
+      ? `https://flutterwave.com{type}` 
+      : 'https://flutterwave.com';
+
+    const response = await axios.get(url, {
+      headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
+    });
+
+    res.json({
+      success: true,
+      categories: response.data.data
+    });
+  } catch (err) {
+    const errorMsg = err.response?.data?.message || err.message;
+    res.status(500).json({ error: `Failed to fetch categories: ${errorMsg}` });
+  }
+});
+
+// 2. VALIDATE CUSTOMER BILL DETAILS (Smartcard Number or Meter Number)
+app.post('/bills/validate', auth, async (req, res) => {
+  try {
+    const { item_code, code, customer } = req.body;
+
+    if (!item_code || !code || !customer) {
+      return res.status(400).json({ error: "item_code, code (biller code), and customer id are required" });
+    }
+
+    const response = await axios.get(
+      `https://flutterwave.com{item_code}/validate?code=${code}&customer=${customer}`,
+      { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` } }
+    );
+
+    res.json({
+      success: true,
+      customerDetails: response.data.data
+    });
+  } catch (err) {
+    const errorMsg = err.response?.data?.message || err.message;
+    res.status(500).json({ error: `Validation failed: ${errorMsg}` });
+  }
+});
+
+// 3. EXECUTE BILL PAYMENT (Deduct wallet and pay Flutterwave)
+app.post('/bills/pay', auth, async (req, res) => {
+  try {
+    const { country, customer, amount, type, pin, description } = req.body;
+
+    // Basic Input Validation
+    if (!country || !customer || !amount || !type || !pin) {
+      return res.status(400).json({ error: "Missing required bill payment fields" });
+    }
+    if (amount <= 0) {
+      return res.status(400).json({ error: "Amount must be greater than 0" });
+    }
+
+    // Fetch Sender
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: "User profile not found" });
+
+    // Verify Security Transaction PIN
+    const isPinValid = await bcrypt.compare(pin, user.transactionPin);
+    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
+
+    // Check Balance
+    if (user.wallet_balance < amount) {
+      return res.status(400).json({ error: "Insufficient wallet balance" });
+    }
+
+    const uniqueReference = `VTP_BILL_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+    const flutterwavePayload = {
+      country: country || "NG",
+      customer: customer, 
+      amount: Number(amount),
+      type: type, 
+      reference: uniqueReference,
+      recurrence: "ONCE"
+    };
+
+    const response = await axios.post(
+      'https://flutterwave.com',
+      flutterwavePayload,
+      { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` } }
+    );
+
+    // Deduct money from user wallet
+    user.wallet_balance -= amount;
+    await user.save();
+
+    // Log the transaction in your database history
+    const newTransaction = new Transaction({
+      userId: user._id,
+      type: 'debit',
+      amount: amount,
+      description: description || `Bill Payment: ${type}`,
+      reference: uniqueReference,
+      status: 'successful',
+      recipient: customer
+    });
+    await newTransaction.save();
+
+    res.json({
+      success: true,
+      message: "Bill payment processed successfully",
+      newBalance: user.wallet_balance,
+      billDetails: response.data.data
+    });
+
+  } catch (err) {
+    const errorMsg = err.response?.data?.message || err.message;
+    res.status(500).json({ error: `Bill payment failed: ${errorMsg}` });
+  }
+});
+
 
 // Start Server
 const PORT = process.env.PORT || 5000;
