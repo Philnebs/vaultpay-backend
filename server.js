@@ -144,17 +144,30 @@ app.get('/balance', auth, async (req, res) => {
   }
 });
 
-// GET USER TRANSACTION HISTORY
+// GET USER TRANSACTION HISTORY WITH PAGINATION AND LIMITS
 app.get('/transactions', auth, async (req, res) => {
   try {
-    // 1. Fetch transactions belonging to the logged-in user
-    // 2. sort({ date: -1 }) ensures the newest transactions appear first
-    const history = await Transaction.find({ userId: req.user.id })
-      .sort({ date: -1 });
+    // 1. Get query parameters from the URL (defaults: page 1, limit 10)
+    // Example: /transactions?limit=5 will load only 5 items
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
 
-    // 3. Return the array back to the frontend app
+    // 2. Fetch the paginated records from MongoDB
+    const history = await Transaction.find({ userId: req.user.id })
+      .sort({ date: -1 }) // Newest first
+      .skip(skip)         // Skip items from previous pages
+      .limit(limit);      // Limit the number of items returned
+
+    // 3. Count total transactions for this user (useful for frontend pagination UI)
+    const totalTransactions = await Transaction.countDocuments({ userId: req.user.id });
+
+    // 4. Return clear structural data back to the frontend
     res.json({
       success: true,
+      currentPage: page,
+      totalPages: Math.ceil(totalTransactions / limit),
+      totalItems: totalTransactions,
       count: history.length,
       transactions: history
     });
