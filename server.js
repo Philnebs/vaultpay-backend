@@ -417,12 +417,11 @@ app.post('/change-password', auth, async (req, res) => {
 // 1. FETCH AVAILABLE BILLS (DSTV, GOTV, ELECTRICITY, WAEC, JAMB)
 app.get('/bills/categories', auth, async (req, res) => {
   try {
-    const { type } = req.query; // e.g., 'airtime', 'data_bundle', 'power', 'cable', 'utility'
+    const { type } = req.query; // 'airtime', 'data_bundle', 'power', 'cable', 'utility'
     
-    // FIXED: Real API domain + proper template string formatting with $ symbol
     const url = type 
-      ? `https://flutterwave.com{type}` 
-      : 'https://flutterwave.com';
+      ? `https://api.flutterwave.com/v3/bill-categories?type=${type}` 
+      : 'https://api.flutterwave.com/v3/bill-categories';
 
     const response = await axios.get(url, {
       headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
@@ -430,109 +429,115 @@ app.get('/bills/categories', auth, async (req, res) => {
 
     res.json({
       success: true,
-      categories: response.data.data
+      categories: response.data
     });
   } catch (err) {
-    const errorMsg = err.response?.data?.message || err.message;
-    res.status(500).json({ error: `Failed to fetch categories: ${errorMsg}` });
+    console.log(err.response?.data)
+    res.status(500).json({ error: `Failed to fetch categories: ${err.response?.data?.message || err.message}` });
   }
 });
 
-// 2. VALIDATE CUSTOMER BILL DETAILS (Smartcard Number or Meter Number)
+// 2. VALIDATE CUSTOMER BILL DETAILS
 app.post('/bills/validate', auth, async (req, res) => {
   try {
     const { item_code, code, customer } = req.body;
 
     if (!item_code || !code || !customer) {
-      return res.status(400).json({ error: "item_code, code (biller code), and customer id are required" });
+      return res.status(400).json({ error: "item_code, code, and customer are required" });
     }
 
-    // FIXED: Real API endpoint with missing slashes and template brackets fixed
     const response = await axios.get(
-      `https://flutterwave.com{item_code}/validate?code=${code}&customer=${customer}`,
+      `https://api.flutterwave.com/v3/bill-items/${item_code}/validate?code=${code}&customer=${customer}`,
       { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` } }
     );
 
     res.json({
       success: true,
-      customerDetails: response.data.data
+      customerDetails: response.data
     });
   } catch (err) {
-    const errorMsg = err.response?.data?.message || err.message;
-    res.status(500).json({ error: `Validation failed: ${errorMsg}` });
+    console.log(err.response?.data)
+    res.status(500).json({ error: `Validation failed: ${err.response?.data?.message || err.message}` });
   }
 });
 
-// 3. EXECUTE BILL PAYMENT (Deduct wallet and pay Flutterwave)
+// 3. EXECUTE BILL PAYMENT
 app.post('/bills/pay', auth, async (req, res) => {
   try {
-    const { country, customer, amount, type, pin, description } = req.body;
+    const { country, customer, amount, type, pin, description, item_code, code } = req.body;
 
-    // Basic Input Validation
-    if (!country || !customer || !amount || !type || !pin) {
+    if (!country || !customer || !amount || !type || !pin || !item_code || !code) {
       return res.status(400).json({ error: "Missing required bill payment fields" });
     }
-    if (amount <= 0) {
-      return res.status(400).json({ error: "Amount must be greater than 0" });
-    }
+    if (amount <= 0) return res.status(400).json({ error: "Amount must be greater than 0" });
 
-    // Fetch Sender
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ error: "User profile not found" });
 
-    // Verify Security Transaction PIN
     const isPinValid = await bcrypt.compare(pin, user.transactionPin);
     if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
 
-    // Check Balance
     if (user.wallet_balance < amount) {
       return res.status(400).json({ error: "Insufficient wallet balance" });
     }
 
     const uniqueReference = `VTP_BILL_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
-    const flutterwavePayload = {
-      country: country || "NG",
-      customer: customer, 
-      amount: Number(amount),
-      type: type, // This will be the biller type code (e.g., BIL111)
-      reference: uniqueReference,
-      recurrence: "ONCE"
-    };
-
-    // FIXED: Swapped broken landing page domain out for the genuine live billing API endpoint
-    const response = await axios.post(
-      'https://flutterwave.com',
-      flutterwavePayload,
-      { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` } }
-    );
-
-    // Deduct money from user wallet
+    // 1. DEDUCT FIRST
     user.wallet_balance -= amount;
     await user.save();
 
-    // Log the transaction in your database history
-    const newTransaction = new Transaction({
-      userId: user._id,
-      type: 'debit',
-      amount: amount,
-      description: description || `Bill Payment: ${type}`,
-      reference: uniqueReference,
-      status: 'successful',
-      recipient: customer
-    });
-    await newTransaction.save();
+    try {
+      // 2. PAY FLUTTERWAVE
+      const response = await axios.post(
+        'https://api.flutterwave.com/v3/bills',
+        {
+          country: country || "NG",
+          customer: customer, 
+          amount: Number(amount),
+          type: type, 
+          reference: uniqueReference,
+          item_code: item_code,
+          code: code,
+          recurrence: "ONCE"
+        },
+        { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` } }
+      );
 
-    res.json({
-      success: true,
-      message: "Bill payment processed successfully",
-      newBalance: user.wallet_balance,
-      billDetails: response.data.data
-    });
+      if (response.data.status !== "success") {
+        user.wallet_balance += amount; // REFUND
+        await user.save();
+        return res.status(400).json({ error: response.data.message });
+      }
+
+      // 3. LOG TRANSACTION
+      const newTransaction = new Transaction({
+        userId: user._id,
+        type: 'debit',
+        amount: amount,
+        description: description || `Bill Payment: ${type}`,
+        reference: uniqueReference,
+        status: 'successful',
+        recipient: customer
+      });
+      await newTransaction.save();
+
+      res.json({
+        success: true,
+        message: "Bill payment processed successfully",
+        newBalance: user.wallet_balance,
+        billDetails: response.data
+      });
+
+    } catch (flwErr) {
+      user.wallet_balance += amount; // REFUND
+      await user.save();
+      throw flwErr;
+    }
 
   } catch (err) {
-    const errorMsg = err.response?.data?.message || err.message;
-    res.status(500).json({ error: `Bill payment failed: ${errorMsg}` });
+    console.log(err.response?.data)
+    res.status(500).json({ error: `Bill payment failed: ${err.response?.data?.message || err.message}` });
   }
 });
 
