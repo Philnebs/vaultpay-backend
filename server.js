@@ -339,26 +339,42 @@ app.get('/banks', async (req, res) => {
   }
 });
 
-// VERIFY ACCOUNT NAME
+// VERIFY ACCOUNT NAME (FIXED API TARGET URL)
 app.post('/verify-account', auth, async (req, res) => {
   try {
     const { account_number, bank_code } = req.body;
 
-    if (!account_number || !bank_code) 
+    if (!account_number || !bank_code) {
       return res.status(400).json({ error: "account_number and bank_code are required" });
+    }
 
-    const response = await axios.post('https://flutterwave.com', {
-      account_number,
+    // THE FIXED API URL: Points strictly to the official API routing infrastructure
+    const targetUrl = 'https://api.flutterwave.com/v3/accounts/resolve';
+
+    const response = await axios.post(targetUrl, {
+      account_number: account_number,
       account_bank: bank_code
     }, {
-      headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` }
+      headers: { 
+        'Authorization': `Bearer ${process.env.FLW_SECRET_KEY}`,
+        'Content-Type': 'application/json'
+      }
     });
     
+    // Transmits the resolved name dictionary back to your mobile screen structure
     res.json(response.data);
+
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // Keeps you updated on incoming server responses inside your terminal
+    console.error("❌ Name Verification Backend Error:", err.response?.data || err.message);
+    
+    res.status(500).json({ 
+      error: "Verification failed", 
+      details: err.response?.data?.message || err.message 
+    });
   }
 });
+
 // GET CURRENT LOGGED-IN USER PROFILE
 app.get('/profile', auth, async (req, res) => {
   try {
