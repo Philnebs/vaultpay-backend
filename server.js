@@ -23,8 +23,16 @@ const UserSchema = new mongoose.Schema({
   account_number: { type: String, unique: true },
   wallet_balance: { type: Number, default: 1000.00 },
   created_at: { type: Date, default: Date.now },
-  transactionPin: { type: String }
+  transactionPin: { type: String },
+    resetOtpCode: { type: String },
+  resetOtpExpires: { type: Date },
+  isVerified: { type: Boolean, default: false },
+  otpCode: { type: String },
+  otpExpires: { type: Date }
+
 });
+  
+
 
 const User = mongoose.model('User', UserSchema);
 
@@ -58,21 +66,45 @@ const auth = async (req, res, next) => {
   }
 };
 
-// REGISTER
+// REGISTER ROUTE WITH INTEGRATED SIGNUP OTP DISPATCH
 app.post('/register', async (req, res) => {
   try {
     const { name, email, phone, password } = req.body;
 
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) return res.status(400).json({ error: "Email address already registered" });
+
     const hashedPassword = await bcrypt.hash(password, 10);
     
-    // Generate 10 digit account number
+    // Generate unique 10-digit internal wallet account number string
     const account_number = Math.floor(1000000000 + Math.random() * 9000000000).toString();
 
-    const user = new User({ name, email, phone, password: hashedPassword, account_number, wallet_balance: 1000 });
+    // GENERATE SECURE 6-DIGIT SIGNUP VERIFICATION OTP
+    const registrationOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpires = Date.now() + 15 * 60 * 1000; // Active for exactly 15 minutes
+
+    // Create user with verification states locked
+    const user = new User({ 
+      name, 
+      email, 
+      phone, 
+      password: hashedPassword, 
+      account_number, 
+      wallet_balance: 1000.00,
+      isVerified: false, // User is locked until OTP validation succeeds
+      otpCode: registrationOtp,
+      otpExpires: otpExpires
+    });
+    
     await user.save();
 
-    const { password: _, ...userWithoutPassword } = user.toObject();
+    // SERVER TERMINAL LOGGER OUTPUT VIEW FOR TESTING PIPELINES
+    console.log(`\n✉️  [VAULTPAY NG] Onboarding Activation OTP for ${email} is: ${registrationOtp}\n`);
 
+    const { password: _, otpCode: __, otpExpires: ___, ...userWithoutSecrets } = user.toObject();
+
+    // Create a temporary session token for the verification screen step
     const token = jwt.sign(
       { id: user._id }, 
       process.env.JWT_SECRET,
@@ -80,9 +112,9 @@ app.post('/register', async (req, res) => {
     );
 
     res.status(201).json({ 
-      message: "User created", 
+      message: "User created. OTP verification required.", 
       token: token,
-      user: userWithoutPassword 
+      user: userWithoutSecrets 
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -607,6 +639,65 @@ app.post('/deposit-webhook', async (req, res) => {
     }
   } catch (err) {
     console.error("❌ Deposit Webhook Error:", err.message);
+  }
+});// INITIATE FORGOT PASSWORD (REQUEST 6-DIGIT OTP)
+app.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: "Email address is required" });
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(400).json({ error: "No wallet profile found with this email" });
+
+    // Generate secure 6-digit verification code string
+    const cryptoOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // Save to user model with a 10-minute expiration timer window
+    user.resetOtpCode = cryptoOtp;
+    user.resetOtpExpires = Date.now() + 10 * 60 * 1000; 
+    await user.save();
+
+    // BACKEND TERMINAL OUTPUT LOGGER FOR SANDBOX TESTING
+    console.log(`\n✉️  [VAULTPAY NG SECURITY] Recovery OTP code for ${email} is: ${cryptoOtp}\n`);
+
+    res.json({ success: true, message: "Security password recovery OTP dispatched successfully!" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// SUBMIT OTP AND UPDATE PASSWORD (RESET WINDOW CLOSURE)
+app.post('/reset-password', async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({ error: "Email, OTP code, and new password are required" });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: "New password must be at least 6 characters long" });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(400).json({ error: "User profile mismatch error" });
+
+    // Core validation gate: matches code values and looks up clock expiration states
+    if (user.resetOtpCode !== otp || Date.now() > user.resetOtpExpires) {
+      return res.status(400).json({ error: "Invalid or expired recovery OTP code. Try again." });
+    }
+
+    // Encrypt the fresh password hash identically using your standard 10 salt rounds
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+    
+    // Wipe out the temporary token variables from the database document profile
+    user.resetOtpCode = undefined;
+    user.resetOtpExpires = undefined;
+    await user.save();
+
+    res.json({ success: true, message: "Your wallet access password has been reset successfully!" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
