@@ -1,3 +1,4 @@
+const nodemailer = require('nodemailer');
 const express = require('express');
 const mongoose = require('mongoose');
 require('dotenv').config();
@@ -640,29 +641,32 @@ app.post('/deposit-webhook', async (req, res) => {
   } catch (err) {
     console.error("❌ Deposit Webhook Error:", err.message);
   }
-});// INITIATE FORGOT PASSWORD (REQUEST 6-DIGIT OTP)
+});// INITIATE FORGOT PASSWORD OTP
 app.post('/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
-    if (!email) return res.status(400).json({ error: "Email address is required" });
-
+    if (!email) return res.status(400).json({ error: "Email required" });
     const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ error: "No wallet profile found with this email" });
-
-    // Generate secure 6-digit verification code string
+    if (!user) return res.status(400).json({ error: "No user found" });
     const cryptoOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    
-    // Save to user model with a 10-minute expiration timer window
     user.resetOtpCode = cryptoOtp;
-    user.resetOtpExpires = Date.now() + 10 * 60 * 1000; 
+    user.resetOtpExpires = Date.now() + 10 * 60 * 1000;
     await user.save();
-
-    // BACKEND TERMINAL OUTPUT LOGGER FOR SANDBOX TESTING
-    console.log(`\n✉️  [VAULTPAY NG SECURITY] Recovery OTP code for ${email} is: ${cryptoOtp}\n`);
-
-    res.json({ success: true, message: "Security password recovery OTP dispatched successfully!" });
+    const transporter = nodemailer.createTransport({
+      host: '://brevo.com',
+      port: 587,
+      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+    });
+    const mailOptions = {
+      from: '"Security" <no-reply@domain.com>',
+      to: email,
+      subject: 'Password Reset Code',
+      html: `Your OTP is: ${cryptoOtp}`
+    };
+    await transporter.sendMail(mailOptions);
+    return res.status(200).json({ success: true, message: "OTP sent" });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 });
 
@@ -694,11 +698,11 @@ app.post('/reset-password', async (req, res) => {
     user.resetOtpCode = undefined;
     user.resetOtpExpires = undefined;
     await user.save();
-
     res.json({ success: true, message: "Your wallet access password has been reset successfully!" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+  
 });
 
 // Start Server
