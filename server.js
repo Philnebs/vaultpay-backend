@@ -641,33 +641,40 @@ app.post('/deposit-webhook', async (req, res) => {
   } catch (err) {
     console.error("❌ Deposit Webhook Error:", err.message);
   }
-});// INITIATE FORGOT PASSWORD OTP
+});// INITIATE FORGOT PASSWORD OTP (HTTP API VERSION)
 app.post('/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: "Email required" });
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ error: "No user found" });
+    
     const cryptoOtp = Math.floor(100000 + Math.random() * 900000).toString();
     user.resetOtpCode = cryptoOtp;
     user.resetOtpExpires = Date.now() + 10 * 60 * 1000;
     await user.save();
-    const transporter = nodemailer.createTransport({
-    
-      host: process.env.EMAIL_HOST,
-  port: process.env.EMAIL_PORT,
-  secure: false,
-      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
-    });
-    const mailOptions = {
-      from: '"Security" <no-reply@domain.com>',
-      to: email,
-      subject: 'Password Reset Code',
-      html: `Your OTP is: ${cryptoOtp}`
-    };
-    await transporter.sendMail(mailOptions);
+
+    // Uses the Axios package to send your mail via a standard secure web request
+    await axios.post(
+      'https://brevo.com',
+      {
+        sender: { name: "VaultPay Security", email: "no-reply@vaultpay.ng" },
+        to: [{ email: email }],
+        subject: "VaultPay Password Reset Code",
+        htmlContent: `<p>Your OTP code is: <strong>${cryptoOtp}</strong></p>`
+      },
+      {
+        headers: {
+          'api-key': process.env.BREVO_API_KEY,
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000
+      }
+    );
+
     return res.status(200).json({ success: true, message: "OTP sent" });
   } catch (err) {
+    console.error("Brevo Error:", err.response?.data || err.message);
     return res.status(500).json({ error: err.message });
   }
 });
