@@ -653,8 +653,10 @@ app.post('/forgot-password', async (req, res) => {
     user.resetOtpExpires = Date.now() + 10 * 60 * 1000;
     await user.save();
     const transporter = nodemailer.createTransport({
-      host: '://brevo.com',
-      port: 587,
+    
+      host: process.env.EMAIL_HOST,
+  port: process.env.EMAIL_PORT,
+  secure: false,
       auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
     });
     const mailOptions = {
