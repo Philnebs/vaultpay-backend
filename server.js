@@ -662,7 +662,7 @@ app.post('/forgot-password', async (req, res) => {
     const brevoResponse = await axios.post(
       'https://api.brevo.com/v3/smtp/email', // <-- THIS WAS WRONG
       {
-        sender: { name: "VaultPay Security", email: "no-reply@vaultpay.ng" },
+        sender: { name: "VaultPay Security", email: "ichinegbo@gmail.com" },
         to: [{ email: email }],
         subject: "VaultPay Password Reset Code",
         htmlContent: `<p>Your OTP code is: <strong>${cryptoOtp}</strong>. It expires in 10 minutes.</p>`
