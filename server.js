@@ -67,60 +67,165 @@ const auth = async (req, res, next) => {
   }
 };
 
-// REGISTER ROUTE WITH INTEGRATED SIGNUP OTP DISPATCH
-app.post('/register', async (req, res) => {
+// STEP 1: VALIDATE DATA AND SEND OTP EMAIL
+app.post('/api/register/initiate', async (req, res) => {
   try {
-    const { name, email, phone, password } = req.body;
+    const { name, email, phone, password, bvn } = req.body;
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) return res.status(400).json({ error: "Email address already registered" });
+    if (!name || !email || !phone || !password || !bvn) {
+      return res.status(400).json({ error: "All registration fields and BVN are required." });
+    }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    
-    // Generate unique 10-digit internal wallet account number string
-    const account_number = Math.floor(1000000000 + Math.random() * 9000000000).toString();
+    const normalizedEmail = email.toLowerCase().trim();
 
-    // GENERATE SECURE 6-DIGIT SIGNUP VERIFICATION OTP
+    // Ensure the email is not already registered
+    const existingUser = await User.findOne({ email: normalizedEmail });
+    if (existingUser) {
+      return res.status(400).json({ error: "Email is already registered on VaultPay." });
+    }
+
+    // Generate 6-digit registration OTP
     const registrationOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpires = Date.now() + 15 * 60 * 1000; // Active for exactly 15 minutes
+    const otpExpiryTime = Date.now() + 15 * 60 * 1000; // Expires in 15 minutes
 
-    // Create user with verification states locked
-    const user = new User({ 
-      name, 
-      email, 
-      phone, 
-      password: hashedPassword, 
-      account_number, 
-      wallet_balance: 1000.00,
-      isVerified: false, // User is locked until OTP validation succeeds
-      otpCode: registrationOtp,
-      otpExpires: otpExpires
-    });
-    
-    await user.save();
+    // Encrypt password now so it's ready
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
 
-    // SERVER TERMINAL LOGGER OUTPUT VIEW FOR TESTING PIPELINES
-    console.log(`\n✉️  [VAULTPAY NG] Onboarding Activation OTP for ${email} is: ${registrationOtp}\n`);
-
-    const { password: _, otpCode: __, otpExpires: ___, ...userWithoutSecrets } = user.toObject();
-
-    // Create a temporary session token for the verification screen step
-    const token = jwt.sign(
-      { id: user._id }, 
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
+    // Save user as "unverified" temporarily
+    // If the email already exists unverified, we update it instead of making a duplicate
+    await User.findOneAndUpdate(
+      { email: normalizedEmail },
+      {
+        name: name.trim(),
+        phone: phone.trim(),
+        password: hashedPassword,
+        otpCode: registrationOtp,
+        otpExpires: otpExpiryTime,
+        isVerified: false,
+        // Temporarily store the BVN in a custom field or use the tracking ref to hold it
+        flw_order_ref: `TEMP-BVN:${bvn.trim()}` 
+      },
+      { upsert: true, new: true }
     );
 
-    res.status(201).json({ 
-      message: "User created. OTP verification required.", 
-      token: token,
-      user: userWithoutSecrets 
-    });
+    // Send the Verification OTP using your Brevo Account API
+    await axios.post(
+       // Use Brevo Endpoint here
+      'https://api.brevo.com/v3/smtp/email',
+      {
+        sender: { name: "VaultPay Security", email: "ichinegbo@gmail.com" },
+        to: [{ email: normalizedEmail }],
+        subject: "Verify Your VaultPay Account",
+        htmlContent: `<p>Hello ${name},</p><p>Your registration verification code is: <strong>${registrationOtp}</strong>. It expires in 15 minutes.</p>`
+      },
+      {
+        headers: {
+          'api-key': process.env.BREVO_API_KEY,
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000
+      }
+    );
+
+    console.log(`📩 Registration OTP sent successfully to ${normalizedEmail}`);
+    return res.status(200).json({ success: true, message: "Verification OTP sent to email." });
+
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("❌ Registration Initiation Failure:", err.message);
+    return res.status(500).json({ error: "Failed to process registration entry.", details: err.message });
   }
 });
+// STEP 2: VERIFY CODE, RUN FLUTTERWAVE PIPELINE, AND ACTIVATE ACCOUNT
+app.post('/api/register/verify', async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+      return res.status(400).json({ error: "Email and OTP code are required." });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await User.findOne({ email: normalizedEmail });
+
+    if (!user) return res.status(400).json({ error: "Registration session not found." });
+    if (user.isVerified) return res.status(400).json({ error: "Account is already verified." });
+
+    // Validate the OTP
+    if (user.otpCode !== otp.toString().trim()) {
+      return res.status(400).json({ error: "Invalid verification code." });
+    }
+    if (Date.now() > user.otpExpires) {
+      return res.status(400).json({ error: "Verification code has expired. Restart registration." });
+    }
+
+    // Extract the temporary BVN we stored in Step 1
+    const cleanBvn = user.flw_order_ref.replace("TEMP-BVN:", "");
+
+    console.log(`⏳ OTP Verified! Generating real bank details via Flutterwave for ${normalizedEmail}...`);
+
+    // Split names cleanly for Flutterwave requirements
+    const nameParts = user.name.split(" ");
+    const firstName = nameParts[0] || "User";
+    const lastName = nameParts.slice(1).join(" ") || "VaultPay";
+
+    // Request the live permanent bank account
+    const flwResponse = await axios.post(
+      'https://api.flutterwave.com/v3/virtual-account-numbers',
+      {
+        email: normalizedEmail,
+        is_permanent: true,
+        bvn: cleanBvn,
+        tx_ref: `VP-REF-${Date.now()}`,
+        firstname: firstName,
+        lastname: lastName,
+        phonenumber: user.phone
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 18000
+      }
+    );
+
+    if (flwResponse.data.status !== 'success') {
+      return res.status(400).json({ error: "Fintech routing allocation failed. Check BVN metrics." });
+    }
+
+    const flwData = flwResponse.data.data;
+
+    // Save final details, mark as verified, and clear temporary fields
+    user.isVerified = true;
+    user.account_number = flwData.account_number;
+    user.bank_name = flwData.bank_name;
+    user.flw_order_ref = flwData.order_ref; // Overwrite temp BVN string with real order ref
+    user.otpCode = undefined;
+    user.otpExpires = undefined;
+    user.wallet_balance = 1000.00; // Assign your welcome balance configuration
+
+    await user.save();
+
+    console.log(`🚀 VaultPay Fully Activated: ${user.account_number} (${user.bank_name})`);
+
+    return res.status(200).json({
+      success: true,
+      message: "Your email has been verified and your account is active!",
+      account_info: {
+        account_number: user.account_number,
+        bank_name: user.bank_name,
+        holder_name: user.name
+      }
+    });
+
+  } catch (err) {
+    const errorMsg = err.response?.data?.message || err.message;
+    console.error("❌ Final Verification/Fintech Error:", errorMsg);
+    return res.status(500).json({ error: "Verification processing failed.", details: errorMsg });
+  }
+});
+
 
 // LOGIN
 app.post('/login', async (req, res) => {
@@ -251,12 +356,12 @@ app.post('/send', auth, async (req, res) => {
       narration: description || "VaultPay Transfer",
       currency: "NGN",
       reference: uniqueReference,
-      callback_url: "https://onrender.com" // Adjust as needed
+      callback_url: "https://your-render-app.onrender.com/webhook/flutterwave" // Adjust as needed
     };
 
     // 7. Make the live API Call to Flutterwave to execute the transfer
     const response = await axios.post(
-      'https://flutterwave.com',
+       'https://api.flutterwave.com/v3/transfers',
       flutterwavePayload,
       {
         headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
