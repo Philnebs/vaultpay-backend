@@ -78,40 +78,35 @@ app.post('/api/register/initiate', async (req, res) => {
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Ensure the email is not already registered
     const existingUser = await User.findOne({ email: normalizedEmail });
-    if (existingUser) {
+    if (existingUser && existingUser.isVerified) {
       return res.status(400).json({ error: "Email is already registered on VaultPay." });
     }
 
-    // Generate 6-digit registration OTP
     const registrationOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpiryTime = Date.now() + 15 * 60 * 1000; // Expires in 15 minutes
+    const otpExpiryTime = Date.now() + 15 * 60 * 1000;
 
-    // Encrypt password now so it's ready
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Save user as "unverified" temporarily
-    // If the email already exists unverified, we update it instead of making a duplicate
+    // 💡 FIX: We combine the OTP and BVN into a single string separated by a hyphen
+    const combinedOtpAndBvn = `${registrationOtp}-${bvn.trim()}`;
+
     await User.findOneAndUpdate(
       { email: normalizedEmail },
       {
         name: name.trim(),
         phone: phone.trim(),
         password: hashedPassword,
-        otpCode: registrationOtp,
+        otpCode: combinedOtpAndBvn, // Saves safely into your existing schema field
         otpExpires: otpExpiryTime,
-        isVerified: false,
-        // Temporarily store the BVN in a custom field or use the tracking ref to hold it
-        flw_order_ref: `TEMP-BVN:${bvn.trim()}` 
+        isVerified: false
       },
       { upsert: true, new: true }
     );
 
     // Send the Verification OTP using your Brevo Account API
     await axios.post(
-       // Use Brevo Endpoint here
       'https://api.brevo.com/v3/smtp/email',
       {
         sender: { name: "VaultPay Security", email: "ichinegbo@gmail.com" },
@@ -150,17 +145,20 @@ app.post('/api/register/verify', async (req, res) => {
 
     if (!user) return res.status(400).json({ error: "Registration session not found." });
     if (user.isVerified) return res.status(400).json({ error: "Account is already verified." });
+    if (!user.otpCode) return res.status(400).json({ error: "Verification session data missing. Restart registration." });
+
+    // 💡 FIX: Split the stored field back into the real OTP and the clean BVN string safely
+    const parts = user.otpCode.split('-');
+    const savedOtp = parts[0];
+    const cleanBvn = parts[1];
 
     // Validate the OTP
-    if (user.otpCode !== otp.toString().trim()) {
+    if (savedOtp !== otp.toString().trim()) {
       return res.status(400).json({ error: "Invalid verification code." });
     }
     if (Date.now() > user.otpExpires) {
       return res.status(400).json({ error: "Verification code has expired. Restart registration." });
     }
-
-    // Extract the temporary BVN we stored in Step 1
-    const cleanBvn = user.flw_order_ref.replace("TEMP-BVN:", "");
 
     console.log(`⏳ OTP Verified! Generating real bank details via Flutterwave for ${normalizedEmail}...`);
 
@@ -175,7 +173,7 @@ app.post('/api/register/verify', async (req, res) => {
       {
         email: normalizedEmail,
         is_permanent: true,
-        bvn: cleanBvn,
+        bvn: cleanBvn, // Safely extracted BVN parameter
         tx_ref: `VP-REF-${Date.now()}`,
         firstname: firstName,
         lastname: lastName,
@@ -198,23 +196,21 @@ app.post('/api/register/verify', async (req, res) => {
 
     // Save final details, mark as verified, and clear temporary fields
     user.isVerified = true;
-    user.account_number = flwData.account_number;
-    user.bank_name = flwData.bank_name;
-    user.flw_order_ref = flwData.order_ref; // Overwrite temp BVN string with real order ref
+    user.account_number = flwData.account_number; // Maps straight to your schema's account_number!
     user.otpCode = undefined;
     user.otpExpires = undefined;
-    user.wallet_balance = 1000.00; // Assign your welcome balance configuration
+    user.wallet_balance = 1000.00; 
 
     await user.save();
 
-    console.log(`🚀 VaultPay Fully Activated: ${user.account_number} (${user.bank_name})`);
+    console.log(`🚀 VaultPay Fully Activated: ${user.account_number}`);
 
     return res.status(200).json({
       success: true,
       message: "Your email has been verified and your account is active!",
       account_info: {
         account_number: user.account_number,
-        bank_name: user.bank_name,
+        bank_name: flwData.bank_name,
         holder_name: user.name
       }
     });
