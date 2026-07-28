@@ -22,6 +22,8 @@ const UserSchema = new mongoose.Schema({
   phone: String,
   password: String,
   account_number: { type: String, unique: true },
+  bank_name: { type: String }, 
+  account_name: { type: String },
   wallet_balance: { type: Number, default: 1000.00 },
   created_at: { type: Date, default: Date.now },
   transactionPin: { type: String },
@@ -66,6 +68,24 @@ const auth = async (req, res, next) => {
     res.status(401).json({ error: "Token is not valid" });
   }
 };
+app.post('/api/webhook/flutterwave', async (req, res) => {
+  const secretHash = process.env.FLW_WEBHOOK_HASH;
+  const signature = req.headers["verif-hash"];
+  
+  if (signature!== secretHash) {
+    return res.status(401).json({ error: "Invalid signature" });
+  }
+
+  const event = req.body;
+  console.log("Webhook event:", event.event);
+
+  if (event.event === "virtual_account.credit") {
+    const { account_number, amount, transaction_id } = event.data;
+    // credit user wallet here
+  }
+  
+  res.status(200).json({ status: "success" });
+});
 // STEP 1: VALIDATE DATA AND SEND OTP EMAIL
 app.post('/api/register/initiate', async (req, res) => {
   try {
@@ -164,7 +184,9 @@ app.post('/api/register/verify', async (req, res) => {
     const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "7d" });
 
     user.isVerified = true;
-    user.account_number = flwData.account_number;
+    user.account_number = flwData.data.account_number;
+    user.bank_name = flwData.data.bank_name; 
+user.account_name = flwData.data.account_name;
     user.otpCode = undefined;
     user.otpExpires = undefined;
     user.wallet_balance = 1000.00;
@@ -789,6 +811,51 @@ app.post('/reset-password', async (req, res) => {
   }
   
 });
+
+// VA FUNDING WEBHOOK - When someone sends money to user's account_number
+app.post('/webhook/flutterwave', async (req, res) => {
+  try {
+    res.status(200).send("OK"); // Acknowledge immediately
+    
+    const event = req.body;
+    
+    // Flutterwave sends this event when VA is credited
+    if (event.event === "virtual_account.credit") {
+      const data = event.data;
+      const accountNumber = data.account_number;
+      const amount = data.amount;
+      const reference = data.reference;
+
+      // Prevent duplicate
+      const existingTx = await Transaction.findOne({ reference: reference });
+      if (existingTx) return console.log(`⚠️ Reference ${reference} already processed.`);
+
+      // Find user by account_number
+      const user = await User.findOne({ account_number: accountNumber });
+      if (!user) return console.log(`❌ No user found with account ${accountNumber}`);
+
+      // Credit wallet
+      user.wallet_balance += Number(amount);
+      await user.save();
+
+      // Log transaction
+      const depositTransaction = new Transaction({
+        userId: user._id,
+        type: 'credit',
+        amount: Number(amount),
+        description: `Deposit from ${data.sender_name || 'Bank Transfer'}`,
+        reference: reference,
+        status: 'successful',
+        recipient: accountNumber
+      });
+      await depositTransaction.save();
+
+      console.log(`✅ Credited ₦${amount} to ${user.email}`);
+    }
+  } catch (err) {
+    console.error("❌ VA Webhook Error:", err.message);
+  }
+}); 
 
 // Start Server
 const PORT = process.env.PORT || 5000;
