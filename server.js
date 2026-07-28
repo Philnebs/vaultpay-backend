@@ -51,21 +51,30 @@ const transactionSchema = new mongoose.Schema({
 
 const Transaction = mongoose.model('Transaction', transactionSchema);
 
-// AUTH MIDDLEWARE (FIXED)
+// // AUTH MIDDLEWARE (FIXED & ROBUST)
 const auth = async (req, res, next) => {
   try {
-    const token = req.header('Authorization');
+    let token = req.header('Authorization');
     if (!token) return res.status(401).json({ error: "No token, access denied" });
 
-    const decoded = jwt.verify(token.replace('Bearer ', ''), process.env.JWT_SECRET);
+    // 💡 FIX: Automatically strip 'Bearer ' only if it exists, otherwise keep raw token string
+    if (token.startsWith('Bearer ')) {
+      token = token.slice(7, token.length).trim();
+    } else {
+      token = token.trim();
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
-    // FIX: Set req.user as an object so that req.user.id works across all routes
-    req.user = { id: decoded.id }; 
+    // Set req.user as an object so that req.user.id works across all routes
+    req.user = { id: decoded.id };
     next();
   } catch (err) {
+    console.error("❌ Middleware Verification Rejection:", err.message);
     res.status(401).json({ error: "Token is not valid" });
   }
 };
+
 
 // STEP 1: VALIDATE DATA AND SEND OTP EMAIL
 app.post('/api/register/initiate', async (req, res) => {
@@ -205,13 +214,19 @@ app.post('/api/register/verify', async (req, res) => {
 
     console.log(`🚀 VaultPay Fully Activated: ${user.account_number}`);
 
+        // 🚀 THE CORRECT BACKEND RESPONSE MATCHING FLUTTER'S PROVIDER LOGIC:
     return res.status(200).json({
       success: true,
       message: "Your email has been verified and your account is active!",
-      account_info: {
-        account_number: user.account_number,
-        bank_name: flwData.bank_name,
-        holder_name: user.name
+      token: token, // ✅ Populates authProvider._token perfectly
+      user: {       // ✅ Matches data['user'] inside your Flutter code
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        account_number: user.account_number, // Saves the Flutterwave account number
+        bank_name: flwData.bank_name,         // Saves the assigned partner bank (e.g. Wema Bank)
+        wallet_balance: user.wallet_balance
       }
     });
 
