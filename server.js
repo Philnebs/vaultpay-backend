@@ -51,70 +51,50 @@ const transactionSchema = new mongoose.Schema({
 
 const Transaction = mongoose.model('Transaction', transactionSchema);
 
-// // AUTH MIDDLEWARE (FIXED & ROBUST)
+// AUTH MIDDLEWARE (FIXED)
 const auth = async (req, res, next) => {
   try {
-    let token = req.header('Authorization');
+    const token = req.header('Authorization');
     if (!token) return res.status(401).json({ error: "No token, access denied" });
 
-    // 💡 FIX: Automatically strip 'Bearer ' only if it exists, otherwise keep raw token string
-    if (token.startsWith('Bearer ')) {
-      token = token.slice(7, token.length).trim();
-    } else {
-      token = token.trim();
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token.replace('Bearer ', ''), process.env.JWT_SECRET);
     
-    // Set req.user as an object so that req.user.id works across all routes
-    req.user = { id: decoded.id };
+    // FIX: Set req.user as an object so that req.user.id works across all routes
+    req.user = { id: decoded.id }; 
     next();
   } catch (err) {
-    console.error("❌ Middleware Verification Rejection:", err.message);
     res.status(401).json({ error: "Token is not valid" });
   }
 };
-
-
 // STEP 1: VALIDATE DATA AND SEND OTP EMAIL
 app.post('/api/register/initiate', async (req, res) => {
   try {
     const { name, email, phone, password, bvn } = req.body;
-
-    if (!name || !email || !phone || !password || !bvn) {
+    if (!name ||!email ||!phone ||!password ||!bvn) {
       return res.status(400).json({ error: "All registration fields and BVN are required." });
     }
-
     const normalizedEmail = email.toLowerCase().trim();
-
     const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser && existingUser.isVerified) {
       return res.status(400).json({ error: "Email is already registered on VaultPay." });
     }
-
     const registrationOtp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpExpiryTime = Date.now() + 15 * 60 * 1000;
-
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
-
-    // 💡 FIX: We combine the OTP and BVN into a single string separated by a hyphen
     const combinedOtpAndBvn = `${registrationOtp}-${bvn.trim()}`;
-
     await User.findOneAndUpdate(
       { email: normalizedEmail },
       {
         name: name.trim(),
         phone: phone.trim(),
         password: hashedPassword,
-        otpCode: combinedOtpAndBvn, // Saves safely into your existing schema field
+        otpCode: combinedOtpAndBvn,
         otpExpires: otpExpiryTime,
         isVerified: false
       },
       { upsert: true, new: true }
     );
-
-    // Send the Verification OTP using your Brevo Account API
     await axios.post(
       'https://api.brevo.com/v3/smtp/email',
       {
@@ -123,110 +103,86 @@ app.post('/api/register/initiate', async (req, res) => {
         subject: "Verify Your VaultPay Account",
         htmlContent: `<p>Hello ${name},</p><p>Your registration verification code is: <strong>${registrationOtp}</strong>. It expires in 15 minutes.</p>`
       },
-      {
-        headers: {
-          'api-key': process.env.BREVO_API_KEY,
-          'Content-Type': 'application/json'
-        },
-        timeout: 15000
-      }
+      { headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' }, timeout: 15000 }
     );
-
-    console.log(`📩 Registration OTP sent successfully to ${normalizedEmail}`);
+    console.log(`📩 Registration OTP sent to ${normalizedEmail}`);
     return res.status(200).json({ success: true, message: "Verification OTP sent to email." });
-
   } catch (err) {
     console.error("❌ Registration Initiation Failure:", err.message);
     return res.status(500).json({ error: "Failed to process registration entry.", details: err.message });
   }
 });
-// STEP 2: VERIFY CODE, RUN FLUTTERWAVE PIPELINE, AND ACTIVATE ACCOUNT
+
+// STEP 2: VERIFY CODE, RUN FLUTTERWAVE PIPELINE, AND ACTIVATE ACCOUNT - FIXED
 app.post('/api/register/verify', async (req, res) => {
   try {
     const { email, otp } = req.body;
-
-    if (!email || !otp) {
-      return res.status(400).json({ error: "Email and OTP code are required." });
-    }
+    if (!email ||!otp) return res.status(400).json({ error: "Email and OTP code are required." });
 
     const normalizedEmail = email.toLowerCase().trim();
     const user = await User.findOne({ email: normalizedEmail });
-
     if (!user) return res.status(400).json({ error: "Registration session not found." });
     if (user.isVerified) return res.status(400).json({ error: "Account is already verified." });
     if (!user.otpCode) return res.status(400).json({ error: "Verification session data missing. Restart registration." });
+    if (user.account_number) return res.status(400).json({ error: "Account already has bank details." }); // PREVENT DUPLICATE KEY
 
-    // 💡 FIX: Split the stored field back into the real OTP and the clean BVN string safely
     const parts = user.otpCode.split('-');
     const savedOtp = parts[0];
     const cleanBvn = parts[1];
 
-    // Validate the OTP
-    if (savedOtp !== otp.toString().trim()) {
-      return res.status(400).json({ error: "Invalid verification code." });
-    }
-    if (Date.now() > user.otpExpires) {
-      return res.status(400).json({ error: "Verification code has expired. Restart registration." });
-    }
+    if (savedOtp!== otp.toString().trim()) return res.status(400).json({ error: "Invalid verification code." });
+    if (Date.now() > user.otpExpires) return res.status(400).json({ error: "Verification code has expired. Restart registration." });
 
-    console.log(`⏳ OTP Verified! Generating real bank details via Flutterwave for ${normalizedEmail}...`);
+    console.log(`⏳ OTP Verified! Generating bank details for ${normalizedEmail}...`);
 
-    // Split names cleanly for Flutterwave requirements
-    const nameParts = user.name.split(" ");
+    const nameParts = (user.name || "User VaultPay").split(" ");
     const firstName = nameParts[0] || "User";
     const lastName = nameParts.slice(1).join(" ") || "VaultPay";
+    const cleanPhone = (user.phone || '').replace(/\D/g, '');
 
-    // Request the live permanent bank account
     const flwResponse = await axios.post(
       'https://api.flutterwave.com/v3/virtual-account-numbers',
       {
         email: normalizedEmail,
         is_permanent: true,
-        bvn: cleanBvn, // Safely extracted BVN parameter
+        bvn: cleanBvn,
         tx_ref: `VP-REF-${Date.now()}`,
         firstname: firstName,
         lastname: lastName,
-        phonenumber: user.phone
+        phonenumber: cleanPhone
       },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 18000
-      }
+      { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`, 'Content-Type': 'application/json' }, timeout: 18000 }
     );
 
-    if (flwResponse.data.status !== 'success') {
-      return res.status(400).json({ error: "Fintech routing allocation failed. Check BVN metrics." });
+    if (flwResponse.data.status!== 'success') {
+      return res.status(400).json({ error: "Fintech routing allocation failed. Check BVN metrics.", details: flwResponse.data.message });
     }
 
-    const flwData = flwResponse.data.data;
+    const flwData = flwResponse.data;
 
-    // Save final details, mark as verified, and clear temporary fields
+    // CREATE TOKEN HERE - THIS WAS MISSING
+    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "7d" });
+
     user.isVerified = true;
-    user.account_number = flwData.account_number; // Maps straight to your schema's account_number!
+    user.account_number = flwData.account_number;
     user.otpCode = undefined;
     user.otpExpires = undefined;
-    user.wallet_balance = 1000.00; 
-
+    user.wallet_balance = 1000.00;
     await user.save();
 
-    console.log(`🚀 VaultPay Fully Activated: ${user.account_number}`);
+    console.log(`🚀 VaultPay Activated: ${user.account_number}`);
 
-        // 🚀 THE CORRECT BACKEND RESPONSE MATCHING FLUTTER'S PROVIDER LOGIC:
     return res.status(200).json({
       success: true,
       message: "Your email has been verified and your account is active!",
-      token: token, // ✅ Populates authProvider._token perfectly
-      user: {       // ✅ Matches data['user'] inside your Flutter code
+      token: token, // FIXED
+      user: { // FIXED: removed extra comma
         id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        account_number: user.account_number, // Saves the Flutterwave account number
-        bank_name: flwData.bank_name,         // Saves the assigned partner bank (e.g. Wema Bank)
-        wallet_balance: user.wallet_balance
+        account_info: {
+          account_number: user.account_number,
+          bank_name: flwData.bank_name,
+          holder_name: user.name
+        }
       }
     });
 
@@ -236,7 +192,6 @@ app.post('/api/register/verify', async (req, res) => {
     return res.status(500).json({ error: "Verification processing failed.", details: errorMsg });
   }
 });
-
 
 // LOGIN
 app.post('/login', async (req, res) => {
