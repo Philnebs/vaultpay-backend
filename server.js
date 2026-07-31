@@ -574,10 +574,16 @@ app.get('/bills/categories', auth, async (req, res) => {
       categories: response.data
     });
   } catch (err) {
-    console.log(err.response?.data)
-    res.status(500).json({ error: `Failed to fetch categories: ${err.response?.data?.message || err.message}` });
-  }
-});
+  console.log("========== FLUTTERWAVE ERROR ==========");
+  console.log("STATUS:", err.response?.status);
+  console.log("DATA:", JSON.stringify(err.response?.data, null, 2));
+  console.log("MESSAGE:", err.message);
+  console.log("=======================================");
+
+  res.status(500).json({
+    error: err.response?.data || err.message,
+  });
+}});
 
 // 2. VALIDATE CUSTOMER BILL DETAILS
 app.post('/bills/validate', auth, async (req, res) => {
