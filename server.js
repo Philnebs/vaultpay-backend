@@ -584,6 +584,40 @@ app.get('/bills/categories', auth, async (req, res) => {
     error: err.response?.data || err.message,
   });
 }});
+// FETCH BILL ITEMS / PACKAGES
+app.post('/api/bills/items', auth, async (req, res) => {
+  try {
+    const { item_code } = req.body;
+
+    if (!item_code) {
+      return res.status(400).json({
+        error: "item_code is required"
+      });
+    }
+
+    const response = await axios.get(
+      `https://api.flutterwave.com/v3/bill-items/${item_code}`,
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`
+        }
+      }
+    );
+
+    res.json({
+      success: true,
+      items: response.data
+    });
+
+  } catch (err) {
+    console.log("BILL ITEMS ERROR");
+    console.log(err.response?.data || err.message);
+
+    res.status(500).json({
+      error: err.response?.data || err.message
+    });
+  }
+});
 
 // 2. VALIDATE CUSTOMER BILL DETAILS
 app.post('/bills/validate', auth, async (req, res) => {
