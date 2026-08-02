@@ -557,32 +557,30 @@ app.post('/change-password', auth, async (req, res) => {
   }
 });
 // 1. FETCH AVAILABLE BILLS (DSTV, GOTV, ELECTRICITY, WAEC, JAMB)
+// 1. FETCH AVAILABLE BILLS
 app.get('/bills/categories', auth, async (req, res) => {
   try {
     const { type } = req.query; // 'airtime', 'data_bundle', 'power', 'cable', 'utility'
     
     const url = type 
-      ? `https://api.flutterwave.com/v3/bill-categories?type=${type}` 
-      : 'https://api.flutterwave.com/v3/bill-categories';
+     ? `https://api.flutterwave.com/v3/bill-categories?type=${type}&country=NG` 
+      : 'https://api.flutterwave.com/v3/bill-categories?country=NG';
 
     const response = await axios.get(url, {
       headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
     });
 
+    // Flutterwave wraps it in response.data
     res.json({
       success: true,
-      categories: response.data
+      data: response.data.data || [] // <- send only the array
     });
   } catch (err) {
-  console.log("========== FLUTTERWAVE ERROR ==========");
-  console.log("STATUS:", err.response?.status);
-  console.log("DATA:", JSON.stringify(err.response?.data, null, 2));
-  console.log("MESSAGE:", err.message);
-  console.log("=======================================");
-
-  res.status(500).json({
-    error: err.response?.data || err.message,
-  });
+    console.log("FLW ERROR:", err.response?.data);
+    res.status(500).json({
+      success: false,
+      error: err.response?.data?.message || err.message,
+    });
 }});
 // FETCH BILL ITEMS / PACKAGES
 app.post('/api/bills/items', auth, async (req, res) => {
