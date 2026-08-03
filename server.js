@@ -4,9 +4,11 @@ const mongoose = require('mongoose');
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const axios = require('axios'); // Moved to the top for consistency
+const axios = require('axios');
+const cors = require('cors'); // Moved to the top for consistency
 
 const app = express();
+app.use(cors());
 const JWT_SECRET = process.env.JWT_SECRET;
 app.use(express.json());
 
@@ -556,11 +558,10 @@ app.post('/change-password', auth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-// 1. FETCH AVAILABLE BILLS (DSTV, GOTV, ELECTRICITY, WAEC, JAMB)
-// 1. FETCH AVAILABLE BILLS
-app.get('/bills/categories', auth, async (req, res) => {
+// 1. FETCH AVAILABLE BILLS CATEGORIES - PUBLIC
+app.get('/api/bills/categories', async (req, res) => {
   try {
-    const { type } = req.query; // 'airtime', 'data_bundle', 'power', 'cable', 'utility'
+    const { type } = req.query; // 'airtime', 'data_bundle', 'power', 'cable_tv', 'utility'
     
     const url = type 
      ? `https://api.flutterwave.com/v3/bill-categories?type=${type}&country=NG` 
@@ -570,53 +571,35 @@ app.get('/bills/categories', auth, async (req, res) => {
       headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
     });
 
-    // Flutterwave wraps it in response.data
-    res.json({
-      success: true,
-      data: response.data.data || [] // <- send only the array
-    });
+    res.json({ success: true, data: response.data.data || [] });
   } catch (err) {
     console.log("FLW ERROR:", err.response?.data);
-    res.status(500).json({
-      success: false,
-      error: err.response?.data?.message || err.message,
-    });
-}});
-// FETCH BILL ITEMS / PACKAGES
-app.post('/api/bills/items', auth, async (req, res) => {
-  try {
-    const { item_code } = req.body;
-
-    if (!item_code) {
-      return res.status(400).json({
-        error: "item_code is required"
-      });
-    }
-
-    const response = await axios.get(
-      `https://api.flutterwave.com/v3/bill-items/${item_code}`,
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`
-        }
-      }
-    );
-
-    res.json({
-      success: true,
-      items: response.data
-    });
-
-  } catch (err) {
-    console.log("BILL ITEMS ERROR");
-    console.log(err.response?.data || err.message);
-
-    res.status(500).json({
-      error: err.response?.data || err.message
-    });
+    res.status(500).json({ success: false, error: err.response?.data?.message || err.message });
   }
 });
 
+// 2. FETCH BILL ITEMS / PACKAGES - PUBLIC
+app.get('/api/bills/items', async (req, res) => { // changed to GET
+  try {
+    const { item_code } = req.query; // use query instead of body
+
+    if (!item_code) {
+      return res.status(400).json({ error: "item_code is required" });
+    }
+
+    const response = await axios.get(
+      `https://api.flutterwave.com/v3/bills/categories/${item_code}/products`, // correct FW endpoint
+      { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
+    
+  });
+
+    res.json({ success: true, items: response.data.data || [] });
+
+  } catch (err) {
+    console.log("BILL ITEMS ERROR", err.response?.data || err.message);
+    res.status(500).json({ error: err.response?.data || err.message });
+  }
+});
 // 2. VALIDATE CUSTOMER BILL DETAILS
 app.post('/bills/validate', auth, async (req, res) => {
   try {
@@ -873,8 +856,8 @@ app.post('/deposit-webhook', async (req, res) => {
   } catch (err) {
     console.error("❌ Deposit Webhook Error:", err.message);
   }
-});const cors = require('cors'); // add at top with other requires
-app.use(cors()); // add right after app = express()
+});
+ // add right after app = express()
 app.use(express.json());
 
 // INITIATE FORGOT PASSWORD OTP (BREVO API VERSION)
