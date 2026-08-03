@@ -561,8 +561,7 @@ app.post('/change-password', auth, async (req, res) => {
 // 1. FETCH AVAILABLE BILLS CATEGORIES - PUBLIC
 app.get('/api/bills/categories', async (req, res) => {
   try {
-    const { type } = req.query; // 'airtime', 'data_bundle', 'power', 'cable_tv', 'utility'
-    
+    const { type } = req.query;
     const url = type 
      ? `https://api.flutterwave.com/v3/bill-categories?type=${type}&country=NG` 
       : 'https://api.flutterwave.com/v3/bill-categories?country=NG';
@@ -570,60 +569,48 @@ app.get('/api/bills/categories', async (req, res) => {
     const response = await axios.get(url, {
       headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
     });
-
-    res.json({ success: true, data: response.data.data || [] });
+    res.json({ success: true, data: response.data || [] });
   } catch (err) {
-    console.log("FLW ERROR:", err.response?.data);
+    console.log("FLW CATEGORIES ERROR:", err.response?.data);
     res.status(500).json({ success: false, error: err.response?.data?.message || err.message });
   }
 });
 
 // 2. FETCH BILL ITEMS / PACKAGES - PUBLIC
-app.get('/api/bills/items', async (req, res) => { // changed to GET
+app.get('/api/bills/items', async (req, res) => {
   try {
-    const { item_code } = req.query; // use query instead of body
-
-    if (!item_code) {
-      return res.status(400).json({ error: "item_code is required" });
-    }
+    const { item_code } = req.query;
+    if (!item_code) return res.status(400).json({ error: "item_code is required" });
 
     const response = await axios.get(
-      `https://api.flutterwave.com/v3/bills/categories/${item_code}/products`, // correct FW endpoint
-      { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
-    
-  });
-
-    res.json({ success: true, items: response.data.data || [] });
-
+      `https://api.flutterwave.com/v3/bills/categories/${item_code}/products`,
+      { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` } }
+    );
+    res.json({ success: true, items: response.data || [] });
   } catch (err) {
     console.log("BILL ITEMS ERROR", err.response?.data || err.message);
     res.status(500).json({ error: err.response?.data || err.message });
   }
 });
-// 2. VALIDATE CUSTOMER BILL DETAILS
-app.post('/bills/validate',  async (req, res) => {
+
+// 3. VALIDATE CUSTOMER BILL DETAILS - PUBLIC
+app.post('/api/bills/validate', async (req, res) => {
   try {
     const { item_code, code, customer } = req.body;
-
     if (!item_code || !code || !customer) {
       return res.status(400).json({ error: "item_code, code, and customer are required" });
     }
 
     const response = await axios.get(
-      `https://api.flutterwave.com/v3/bill-items/${item_code}/validate?code=${code}&customer=${customer}`,
+      `https://api.flutterwave.com/v3/bill-validation/${item_code}/validate?code=${code}&customer=${customer}`,
       { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` } }
     );
-
-    res.json({
-      success: true,
-      customerDetails: response.data
-    });
+    res.json({ success: true, customerDetails: response.data.data });
   } catch (err) {
-    console.log(err.response?.data)
+    console.log("VALIDATE ERROR:", err.response?.data)
     res.status(500).json({ error: `Validation failed: ${err.response?.data?.message || err.message}` });
   }
 });
-
 // ===== HELPER: DEDUCT + LOG + CALL FLW BILL =====
 async function payBill({ userId, amount, type, description, flwPayload }) {
   const user = await User.findById(userId);
@@ -671,7 +658,7 @@ async function payBill({ userId, amount, type, description, flwPayload }) {
 }
 
 // ===== GROUP 1: AIRTIME & DATA =====
-app.post('/api/bills/airtime',  async (req, res) => {
+app.post('/api/bills/airtime', auth, async (req, res) => {
   try {
     const { country, customer, amount, item_code, code, pin } = req.body; // customer = phone
     if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
@@ -690,7 +677,7 @@ app.post('/api/bills/airtime',  async (req, res) => {
   }
 });
 
-app.post('/api/bills/data', async (req, res) => {
+app.post('/api/bills/data',auth, async (req, res) => {
   try {
     const { country, customer, amount, item_code, code, pin } = req.body; // customer = phone
     if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
@@ -710,7 +697,7 @@ app.post('/api/bills/data', async (req, res) => {
 });
 
 // ===== GROUP 2: BILLS - ELECTRICITY + CABLE =====
-app.post('/api/bills/electricity', async (req, res) => {
+app.post('/api/bills/electricity',auth, async (req, res) => {
   try {
     const { country, customer, amount, item_code, code, pin } = req.body; // customer = meter no
     if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
@@ -729,7 +716,7 @@ app.post('/api/bills/electricity', async (req, res) => {
   }
 });
 
-app.post('/api/bills/cable', async (req, res) => {
+app.post('/api/bills/cable',auth, async (req, res) => {
   try {
     const { country, customer, amount, item_code, code, pin } = req.body; // customer = smartcard
     if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
@@ -749,7 +736,7 @@ app.post('/api/bills/cable', async (req, res) => {
 });
 
 // ===== GROUP 3: MORE - JAMB/WAEC/BETTING =====
-app.post('/api/bills/jamb', async (req, res) => {
+app.post('/api/bills/jamb',auth, async (req, res) => {
   try {
     const { country, customer, amount, item_code, code, pin } = req.body;
     if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
@@ -768,7 +755,7 @@ app.post('/api/bills/jamb', async (req, res) => {
   }
 });
 
-app.post('/api/bills/waec', async (req, res) => {
+app.post('/api/bills/waec',auth, async (req, res) => {
   try {
     const { country, customer, amount, item_code, code, pin } = req.body;
     if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
@@ -787,7 +774,7 @@ app.post('/api/bills/waec', async (req, res) => {
   }
 });
 
-app.post('/api/bills/betting', async (req, res) => {
+app.post('/api/bills/betting',auth, async (req, res) => {
   try {
     const { country, customer, amount, item_code, code, pin } = req.body; // customer = betting ID
     if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
