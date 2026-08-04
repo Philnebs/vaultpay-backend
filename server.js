@@ -657,42 +657,135 @@ async function payBill({ userId, amount, type, description, flwPayload }) {
   }
 }
 
-// ===== GROUP 1: AIRTIME & DATA =====
-app.post('/api/bills/airtime', auth, async (req, res) => {
-  try {
-    const { country, customer, amount, item_code, code, pin } = req.body; // customer = phone
-    if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
-    const user = await User.findById(req.user.id);
-    const isPinValid = await bcrypt.compare(pin, user.transactionPin);
-    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
+// ====================================================================
+// FIXED LIVE BILLER SYSTEM: AIRTIME, DATA, AND CATEGORIES
+// ====================================================================
 
-    const result = await payBill({
-      userId: req.user.id, amount, type: "AIRTIME",
-      description: `Airtime: ${customer}`,
-      flwPayload: { country: "NG", customer, amount, type: "AIRTIME", item_code, code }
+/**
+ * Helper function to handle wallet balance and call Flutterwave API
+ */
+async function payBill({ userId, amount, description, flwPayload }) {
+  const user = await User.findById(userId);
+  if (!user) throw new Error("User not found");
+  if (user.wallet_balance < Number(amount)) throw new Error("Insufficient wallet balance");
+
+  const tx_ref = `VP-BILL-${Date.now()}`;
+  
+  // Call Flutterwave live endpoint
+  const flwResponse = await axios.post(
+    'https://flutterwave.com',
+    { ...flwPayload, reference: tx_ref },
+    { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`, 'Content-Type': 'application/json' } }
+  );
+
+  if (flwResponse.data.status !== 'success') {
+    throw new Error(flwResponse.data.message || "Biller processor failed payment assignment.");
+  }
+
+  // Deduct Wallet
+  user.wallet_balance -= Number(amount);
+  await user.save();
+
+  // Save transaction to database log tracking records
+  const transaction = new Transaction({
+    userId: user._id,
+    type: 'debit',
+    amount: Number(amount),
+    description: description,
+    reference: tx_ref,
+    status: 'successful',
+    recipient: flwPayload.customer
+  });
+  await transaction.save();
+
+  return { balance: user.wallet_balance, tx: transaction };
+}
+
+/**
+ * @route   GET /api/biller/categories
+ * @desc    Provides filtered biller categories to populate the dropdown
+ */
+app.get('/api/biller/categories', auth, async (req, res) => {
+  try {
+    const { type } = req.query; // Captures 'airtime' or 'data_bundle' from Flutter frontend query params
+    
+    const response = await axios.get('https://flutterwave.com', {
+      headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
     });
-    res.json({ success: true, message: "Airtime sent", ...result });
+
+    let rawData = response.data.data || [];
+
+    // Filter categories explicitly so the dropdown payload size is manageable
+    if (type === 'airtime') {
+      rawData = rawData.filter(item => item.category.toLowerCase() === 'airtime');
+    } else if (type === 'data_bundle') {
+      rawData = rawData.filter(item => item.category.toLowerCase() === 'data bundle');
+    }
+
+    return res.status(200).json({ success: true, data: rawData });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("❌ Dropdown categories collection failed:", err.response?.data || err.message);
+    return res.status(500).json({ error: "Failed to fetch live biller dropdown options." });
   }
 });
 
-app.post('/api/bills/data',auth, async (req, res) => {
+/**
+ * @route   POST /api/biller/airtime
+ * @desc    Processes airtime topups using proper URL matching
+ */
+app.post('/api/biller/airtime', auth, async (req, res) => {
   try {
-    const { country, customer, amount, item_code, code, pin } = req.body; // customer = phone
+    const { country, customer, amount, item_code, code, pin } = req.body;
     if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
+
     const user = await User.findById(req.user.id);
+    if (!user.transactionPin) return res.status(400).json({ error: "Transaction PIN is not configured." });
+
     const isPinValid = await bcrypt.compare(pin, user.transactionPin);
     if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
 
+    // FIX: type parameter must be the specific biller code identifier (e.g., 'BIL108') passed from Flutter
     const result = await payBill({
-      userId: req.user.id, amount, type: "DATA",
-      description: `Data: ${customer}`,
-      flwPayload: { country: "NG", customer, amount, type: "DATA", item_code, code }
+      userId: req.user.id, 
+      amount, 
+      description: `Airtime purchase for mobile line: ${customer}`,
+      flwPayload: { country: country || "NG", customer, amount: Number(amount), type: code, item_code }
     });
-    res.json({ success: true, message: "Data bundle sent", ...result });
+
+    return res.json({ success: true, message: "Airtime sent successfully", ...result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("❌ Airtime route failure:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * @route   POST /api/biller/data
+ * @desc    Processes mobile data package purchases
+ */
+app.post('/api/biller/data', auth, async (req, res) => {
+  try {
+    const { country, customer, amount, item_code, code, pin } = req.body;
+    if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
+
+    const user = await User.findById(req.user.id);
+    if (!user.transactionPin) return res.status(400).json({ error: "Transaction PIN is not configured." });
+
+    const isPinValid = await bcrypt.compare(pin, user.transactionPin);
+    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
+
+    // FIX: passed correct bundle structural tracking codes mapping schemas
+    const result = await payBill({
+      userId: req.user.id, 
+      amount, 
+      description: `Data Bundle purchase for mobile line: ${customer}`,
+      flwPayload: { country: country || "NG", customer, amount: Number(amount), type: code, item_code }
+    });
+
+    return res.json({ success: true, message: "Data bundle sent successfully", ...result });
+  } catch (err) {
+    console.error("❌ Data route failure:", err.message);
+    return res.status(500).json({ error: err.message });
   }
 });
 
