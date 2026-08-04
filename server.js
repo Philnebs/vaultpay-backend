@@ -702,14 +702,14 @@ async function payBill({ userId, amount, description, flwPayload }) {
 }
 
 /**
- * @route   GET /api/biller/categories
- * @desc    Provides filtered biller categories to populate the dropdown
+ *   GET /api/biller/categories
+ * rovides filtered biller categories to populate the dropdown
  */
 app.get('/api/biller/categories', auth, async (req, res) => {
   try {
     const { type } = req.query; // Captures 'airtime' or 'data_bundle' from Flutter frontend query params
     
-    const response = await axios.get('https://flutterwave.com', {
+    const response = await axios.get('https://api.flutterwave.com/v3/billers', {
       headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
     });
 
