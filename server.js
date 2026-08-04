@@ -673,7 +673,7 @@ async function payBill({ userId, amount, description, flwPayload }) {
   
   // Call Flutterwave live endpoint
   const flwResponse = await axios.post(
-    'https://flutterwave.com',
+    'https://api.flutterwave.com/v3/bill-payment',
     { ...flwPayload, reference: tx_ref },
     { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`, 'Content-Type': 'application/json' } }
   );
