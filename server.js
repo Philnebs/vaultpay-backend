@@ -201,6 +201,62 @@ app.post('/api/register/verify', async (req, res) => {
   }
 });
 
+// ============================================
+// CREATE VIRTUAL ACCOUNT - FLUTTERWAVE
+// ============================================
+app.post('/api/account/create', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await User.findById(userId);
+    
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.account_number) {
+      return res.status(400).json({ 
+        error: 'Account already exists', 
+        account_number: user.account_number,
+        bank_name: user.bank_name
+      });
+    }
+
+    // Call Flutterwave to create dedicated virtual account
+    const fwResponse = await axios.post(
+      'https://api.flutterwave.com/v3/virtual-account-numbers',
+      {
+        email: user.email,
+        tx_ref: `VA-${userId}-${Date.now()}`,
+        amount: null, // null = permanent account
+        fullname: user.fullName,
+        is_permanent: true
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    const data = fwResponse.data;
+    
+    // Save to user
+    user.account_number = data.account_number;
+    user.bank_name = data.bank_name;
+    await user.save();
+
+    res.json({ 
+      success: true, 
+      message: 'Virtual account created',
+      account_number: data.account_number,
+      bank_name: data.bank_name,
+      account_name: data.account_name
+    });
+
+  } catch (err) {
+    console.error(err.response?.data || err.message);
+    res.status(500).json({ error: err.response?.data?.message || 'Failed to create virtual account' });
+  }
+});
+
 // LOGIN - RESTORED
 app.post('/login', async (req, res) => {
   try {
