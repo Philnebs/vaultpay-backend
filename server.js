@@ -204,7 +204,7 @@ app.post('/api/register/verify', async (req, res) => {
 // ============================================
 // CREATE VIRTUAL ACCOUNT - FLUTTERWAVE
 // ============================================
-app.post('/api/account/create', authenticateToken, async (req, res) => {
+app.post('/api/account/create', auth, async (req, res) => {
   try {
     const userId = req.user.id;
     const user = await User.findById(userId);
@@ -225,7 +225,7 @@ app.post('/api/account/create', authenticateToken, async (req, res) => {
         email: user.email,
         tx_ref: `VA-${userId}-${Date.now()}`,
         amount: null, // null = permanent account
-        fullname: user.fullName,
+        fullname: user.name,
         is_permanent: true
       },
       {
@@ -319,37 +319,47 @@ app.post('/reset-password', async (req, res) => {
 // SET PIN, BALANCE, PROFILE, CHANGE PASSWORD, SEND, DEPOSIT, BANKS, VERIFY-ACCOUNT, TRANSACTIONS - ALL YOUR EXISTING ROUTES GO HERE
 // [Paste all your other routes here - I kept them 100%]
 
-// ====== JAMB HUB - NEW ======
-app.post('/api/jamb/buy-epin', auth, async (req, res) => {
+// ====== VTPASS SERVICES FOR "MORE" SCREEN ======
+app.get('/api/vtpass/services', auth, async (req, res) => {
   try {
-    const { phone, email, amount, pin } = req.body;
-    if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
+    const response = await axios.get('https://vtpass.com/api/service-variations', {
+      headers: { 'api-key': process.env.VTPASS_API_KEY, 'secret-key': process.env.VTPASS_SECRET_KEY }
+    });
+    res.json(response.data);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch services' });
+  }
+});
+
+// ====== GENERIC VTPASS PAY - FOR JAMB, WAEC, BETTING ======
+app.post('/api/vtpass/pay', auth, async (req, res) => {
+  try {
+    const { serviceID, billersCode, variation_code, phone, amount, pin } = req.body;
     const user = await User.findById(req.user.id);
+    
+    if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
     const isPinValid = await bcrypt.compare(pin, user.transactionPin);
     if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
     if (user.wallet_balance < amount) return res.status(400).json({ error: "Insufficient wallet balance" });
 
-    const request_id = `VP_JAMB_${Date.now()}`;
+    const request_id = `VP_${Date.now()}`;
     user.wallet_balance -= Number(amount);
     await user.save();
 
-    const vtpassData = { request_id, serviceID: "jamb", amount, phone, billersCode: "" };
-    const vtResponse = await callVTpass(vtpassData);
+    const vtResponse = await callVTpass({ request_id, serviceID, amount, phone, billersCode, variation_code });
 
-    if (vtResponse.response_code!== "000") {
-      user.wallet_balance += Number(amount);
+    if (vtResponse.response_code !== "000") {
+      user.wallet_balance += Number(amount); // refund
       await user.save();
-      throw new Error(vtResponse.message);
+      return res.status(400).json({ error: vtResponse.message });
     }
 
-    await new Transaction({ userId: user._id, type: 'debit', amount, description: `JAMB e-PIN purchase`, reference: request_id, status: 'successful', recipient: phone }).save();
-
-    res.json({ success: true, message: "JAMB PIN purchased", pin: vtResponse.content?.transactions?.product_name || vtResponse.purchased_code, newBalance: user.wallet_balance });
+    await new Transaction({ userId: user._id, type: 'debit', amount, description: `${serviceID} purchase`, reference: request_id, recipient: phone }).save();
+    res.json({ success: true, message: "Payment Successful", data: vtResponse.content, newBalance: user.wallet_balance });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
-
 // ====== UNIFIED FLUTTERWAVE WEBHOOK ======
 app.post('/webhook/flutterwave', async (req, res) => {
   try {
