@@ -1,110 +1,70 @@
-const billEngine = require("../services/billEngine");
+const axios = require("axios");
 
-// ======================================
-// GET BILL CATEGORIES
-// ======================================
+const VTPASS_URL = "https://api-service.vtpass.com/api";
+const headers = {
+  "api-key": process.env.VTPASS_API_KEY,
+  "secret-key": process.env.VTPASS_SECRET_KEY
+};
+
+// 1. GET CATEGORIES
 exports.getCategories = async (req, res) => {
-
-    try {
-
-        const { type } = req.query;
-
-        const data = await billEngine.getCategories(type);
-
-        res.json({
-            success: true,
-            categories: data
-        });
-
-    } catch (err) {
-
-        console.error(err.message);
-
-        res.status(500).json({
-            success: false,
-            error: err.message
-        });
-
-    }
-
+  try {
+    const { type } = req.query; // power, cabletv, airtime, data
+    const vtRes = await axios.get(`${VTPASS_URL}/service-variations?serviceID=${type}`, { headers });
+    res.json({ success: true, data: vtRes.data.content?.variations || [] });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
 };
 
-// ======================================
-// GET BILL ITEMS / PACKAGES
-// ======================================
+// 2. GET ITEMS
 exports.getBillItems = async (req, res) => {
-
-    try {
-
-        const { item_code } = req.body;
-
-        if (!item_code) {
-
-            return res.status(400).json({
-                success: false,
-                error: "item_code is required"
-            });
-
-        }
-
-        const data = await billEngine.getBillItems(item_code);
-
-        res.json({
-            success: true,
-            items: data
-        });
-
-    } catch (err) {
-
-        console.error(err.message);
-
-        res.status(500).json({
-            success: false,
-            error: err.message
-        });
-
-    }
-
+  try {
+    const { serviceID } = req.body;
+    const vtRes = await axios.get(`${VTPASS_URL}/service-variations?serviceID=${serviceID}`, { headers });
+    res.json({ success: true, data: vtRes.data.content?.variations || [] });
+  } catch (e) {
+    res.status(500).json({ success: false });
+  }
 };
 
-// ======================================
-// VALIDATE CUSTOMER
-// ======================================
-exports.validateCustomer = async (req, res) => {
+// 3. VALIDATE
+exports.validateBill = async (req, res) => {
+  try {
+    const vtRes = await axios.post(`${VTPASS_URL}/merchant-verify`, req.body, { headers });
+    res.json(vtRes.data);
+  } catch (e) {
+    res.status(500).json({ success: false });
+  }
+};
 
-    try {
+// 4. PAY BILL
+exports.payBill = async (req, res) => {
+  try {
+    // TODO: 1. Deduct wallet 2. Call VTpass 3. Save transaction
+    const vtRes = await axios.post(`${VTPASS_URL}/pay`, req.body, { headers });
+    res.json(vtRes.data);
+  } catch (e) {
+    res.status(500).json({ success: false });
+  }
+};
 
-        const { item_code, code, customer } = req.body;
+// 5. GET ALL VTPASS SERVICES
+exports.getVtpassServices = async (req, res) => {
+  try {
+    const vtRes = await axios.get(`${VTPASS_URL}/services`, { headers });
+    res.json({ success: true, data: vtRes.data.content || [] });
+  } catch (e) {
+    res.status(500).json({ success: false });
+  }
+};
 
-        if (!item_code || !code || !customer) {
-
-            return res.status(400).json({
-                success: false,
-                error: "item_code, code and customer are required"
-            });
-
-        }
-
-        const data = await billEngine.validateCustomer(
-            item_code,
-            code,
-            customer
-        );
-
-        res.json({
-            success: true,
-            customerDetails: data
-        });
-
-    } catch (err) {
-
-        console.error(err.message);
-
-        res.status(500).json({
-            success: false,
-            error: err.message
-        });
-
-    }
-
+// 6. PAY VTPASS
+exports.payVtpass = async (req, res) => {
+  try {
+    const vtRes = await axios.post(`${VTPASS_URL}/pay`, req.body, { headers });
+    res.json(vtRes.data);
+  } catch (e) {
+    res.status(500).json({ success: false });
+  }
 };
