@@ -11,60 +11,66 @@ exports.getCategories = async (req, res) => {
   try {
     const { type } = req.query; // power, cabletv, airtime, data
     const vtRes = await axios.get(`${VTPASS_URL}/service-variations?serviceID=${type}`, { headers });
-    res.json({ success: true, data: vtRes.data.content?.variations || [] });
+    res.json({ success: true, data: vtRes.data.content?.variations || vtRes.data.content || [] });
+  } catch (e) {
+    console.error(e.response?.data);
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// 2. GET ITEMS/PACKAGES
+exports.getBillItems = async (req, res) => {
+  try {
+    const { serviceID } = req.body;
+    const vtRes = await axios.get(`${VTPASS_URL}/service-variations?serviceID=${serviceID}`, { headers });
+    res.json({ success: true, data: vtRes.data.content?.variations || vtRes.data.content || [] });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
   }
 };
 
-// 2. GET ITEMS
-exports.getBillItems = async (req, res) => {
-  try {
-    const { serviceID } = req.body;
-    const vtRes = await axios.get(`${VTPASS_URL}/service-variations?serviceID=${serviceID}`, { headers });
-    res.json({ success: true, data: vtRes.data.content?.variations || [] });
-  } catch (e) {
-    res.status(500).json({ success: false });
-  }
-};
-
-// 3. VALIDATE
+// 3. VALIDATE METER/SMARTCARD
 exports.validateBill = async (req, res) => {
   try {
-    const vtRes = await axios.post(`${VTPASS_URL}/merchant-verify`, req.body, { headers });
-    res.json(vtRes.data);
+    const { billersCode, serviceID, type } = req.body;
+    const vtRes = await axios.post(`${VTPASS_URL}/merchant-verify`, { billersCode, serviceID, type }, { headers });
+    res.json({ success: true, data: vtRes.data });
   } catch (e) {
-    res.status(500).json({ success: false });
+    res.status(500).json({ success: false, message: e.message });
   }
 };
 
 // 4. PAY BILL
 exports.payBill = async (req, res) => {
   try {
-    // TODO: 1. Deduct wallet 2. Call VTpass 3. Save transaction
-    const vtRes = await axios.post(`${VTPASS_URL}/pay`, req.body, { headers });
-    res.json(vtRes.data);
+    const payload = req.body; // billersCode, serviceID, variation_code, amount, phone, request_id
+    const vtRes = await axios.post(`${VTPASS_URL}/pay`, payload, { headers });
+    res.json({ success: true, data: vtRes.data });
   } catch (e) {
-    res.status(500).json({ success: false });
+    res.status(500).json({ success: false, message: e.message });
   }
 };
-
-// 5. GET ALL VTPASS SERVICES
+// 5. GET ALL VTPASS SERVICES FOR "MORE" SCREEN
 exports.getVtpassServices = async (req, res) => {
   try {
-    const vtRes = await axios.get(`${VTPASS_URL}/services`, { headers });
-    res.json({ success: true, data: vtRes.data.content || [] });
+    const vtRes = await axios.post(`${VTPASS_URL}/service-categories`, { headers });
+    res.json({ 
+      success: true, 
+      data: vtRes.data.content?.categories || vtRes.data.content || [] 
+    });
   } catch (e) {
-    res.status(500).json({ success: false });
+    console.error("VTpass Error:", e.response?.data);
+    res.status(500).json({ success: false, message: e.message });
   }
 };
 
-// 6. PAY VTPASS
+// 6. PAY VTPASS SERVICES - JAMB/WAEC/BETTING
 exports.payVtpass = async (req, res) => {
   try {
-    const vtRes = await axios.post(`${VTPASS_URL}/pay`, req.body, { headers });
-    res.json(vtRes.data);
+    const payload = req.body; // serviceID, billersCode, variation_code, amount, phone, request_id
+    const vtRes = await axios.post(`${VTPASS_URL}/pay`, payload, { headers });
+    res.json({ success: true, data: vtRes.data });
   } catch (e) {
-    res.status(500).json({ success: false });
+    res.status(500).json({ success: false, message: e.message });
   }
 };
