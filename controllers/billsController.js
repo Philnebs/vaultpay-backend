@@ -53,7 +53,7 @@ exports.payBill = async (req, res) => {
 // 5. GET ALL VTPASS SERVICES FOR "MORE" SCREEN
 exports.getVtpassServices = async (req, res) => {
   try {
-    const vtRes = await axios.post(`${VTPASS_URL}/service-categories`, { headers });
+    const vtRes = await axios.get(`${VTPASS_URL}/service-categories`, { headers });
     res.json({ 
       success: true, 
       data: vtRes.data.content?.categories || vtRes.data.content || [] 
