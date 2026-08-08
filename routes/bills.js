@@ -18,7 +18,7 @@ router.get(
 // ===============================
 router.post(
     "/items",
-    auth,
+    
     billsController.getBillItems
 );
 
