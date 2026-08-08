@@ -7,10 +7,12 @@ const bcrypt = require('bcryptjs');
 const axios = require('axios');
 const cors = require('cors');
 const crypto = require('crypto');
+const billsRoutes = require('./routes/bills.routes');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use('/api/bills', billsRoutes); // <-- ADD THIS LINE
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const PROVIDER = process.env.PAYMENT_PROVIDER || 'FLUTTERWAVE'; // SWITCH HERE
