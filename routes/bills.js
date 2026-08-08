@@ -35,13 +35,10 @@ router.get("/vtpass-services", billsController.getVtpassServices);
 // PAY JAMB/WAEC/BETTING ETC
 router.post("/vtpass-pay",  billsController.payVtpass);
 
+
 // ===============================
 // VALIDATE CUSTOMER
 // ===============================
-router.post(
-    "/validate",
-
-    billsController.validateCustomer
-);
+//router.post( "/validate", billsController.validateCustomer);
 
 module.exports = router;
