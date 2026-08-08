@@ -7,7 +7,7 @@ const bcrypt = require('bcryptjs');
 const axios = require('axios');
 const cors = require('cors');
 const crypto = require('crypto');
-const billsRoutes = require('./routes/bills.routes');
+const billsRoutes = require('./routes/bills');
 
 const app = express();
 app.use(cors());
