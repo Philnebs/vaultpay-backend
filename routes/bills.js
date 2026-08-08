@@ -9,7 +9,7 @@ const billsController = require("../controllers/billsController");
 // ===============================
 router.get(
     "/categories",
-    auth,
+    
     billsController.getCategories
 );
 
@@ -30,7 +30,7 @@ router.post("/validate",  billsController.validateBill);
 router.post("/pay", billsController.payBill);
 
 // GET ALL VTPASS SERVICES FOR MORE SCREEN
-router.get("/vtpass-services", auth, billsController.getVtpassServices);
+router.get("/vtpass-services", billsController.getVtpassServices);
 
 // PAY JAMB/WAEC/BETTING ETC
 router.post("/vtpass-pay",  billsController.payVtpass);
