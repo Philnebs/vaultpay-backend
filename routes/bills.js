@@ -24,23 +24,23 @@ router.post(
 
 // ADD THESE 3 NEW ONES
 // VALIDATE METER/SMARTCARD
-router.post("/validate", auth, billsController.validateBill);
+router.post("/validate",  billsController.validateBill);
 
 // PAY ELECTRICITY/CABLE
-router.post("/pay", auth, billsController.payBill);
+router.post("/pay", billsController.payBill);
 
 // GET ALL VTPASS SERVICES FOR MORE SCREEN
 router.get("/vtpass-services", auth, billsController.getVtpassServices);
 
 // PAY JAMB/WAEC/BETTING ETC
-router.post("/vtpass-pay", auth, billsController.payVtpass);
+router.post("/vtpass-pay",  billsController.payVtpass);
 
 // ===============================
 // VALIDATE CUSTOMER
 // ===============================
 router.post(
     "/validate",
-    auth,
+
     billsController.validateCustomer
 );
 
