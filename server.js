@@ -688,7 +688,27 @@ async function payBill({ userId, amount, type, description, flwPayload }) {
     throw err;
   }
 }
-
+// GET NETWORKS FOR DROPDOWN
+app.get('/api/bills/networks', auth, async (req, res) => {
+  try {
+    const axios = require('axios');
+    const response = await axios.get('https://api.flutterwave.com/v3/bill-categories', {
+      headers: {
+        'Authorization': `Bearer ${process.env.FLW_SECRET_KEY}` // <-- use this name
+      }
+    });
+    
+    // Filter for Airtime and Data only
+    const networks = response.data.filter(s => 
+      s.name.includes('AIRTIME') || s.name.includes('DATA')
+    );
+    
+    res.json({ success: true, data: networks });
+  } catch (error) {
+    console.log("NETWORKS ERROR:", error.response?.data || error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 // ===== GROUP 1: AIRTIME & DATA =====
 app.post('/api/bills/airtime', auth, async (req, res) => {
   try {
