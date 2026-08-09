@@ -699,7 +699,7 @@ app.get('/api/bills/networks', auth, async (req, res) => {
     });
     
     // Filter for Airtime and Data only
-    const networks = response.data.filter(s => 
+    const networks = response.data.data.filter(s => 
       s.name.includes('AIRTIME') || s.name.includes('DATA')
     );
     
