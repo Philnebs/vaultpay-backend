@@ -585,7 +585,7 @@ app.get('/bills/categories', auth, async (req, res) => {
   });
 }});
 // FETCH BILL ITEMS / PACKAGES
-app.post('/api/bills/items', auth, async (req, res) => {
+app.post('/bills/items', auth, async (req, res) => {
   try {
     const { item_code } = req.body;
 
@@ -627,6 +627,7 @@ app.post('/bills/validate', auth, async (req, res) => {
     if (!item_code || !code || !customer) {
       return res.status(400).json({ error: "item_code, code, and customer are required" });
     }
+    
 
     const response = await axios.get(
       `https://api.flutterwave.com/v3/bill-items/${item_code}/validate?code=${code}&customer=${customer}`,
@@ -642,6 +643,8 @@ app.post('/bills/validate', auth, async (req, res) => {
     res.status(500).json({ error: `Validation failed: ${err.response?.data?.message || err.message}` });
   }
 });
+
+
 
 // ===== HELPER: DEDUCT + LOG + CALL FLW BILL =====
 async function payBill({ userId, amount, type, description, flwPayload }) {
@@ -687,163 +690,64 @@ async function payBill({ userId, amount, type, description, flwPayload }) {
     await user.save();
     throw err;
   }
+  // 4. MASTER BILL PAYMENT ROUTE - FOR AIRTIME, DATA, ELECTRICITY, CABLE
+app.post('/bills/pay', auth, async (req, res) => {
+  try {
+    const { type, customer, amount, item_code, code, pin } = req.body;
+    
+    // 1. VALIDATIONS
+    if (!type || !customer || !amount || !pin) {
+      return res.status(400).json({ error: "type, customer, amount and pin are required" });
+    }
+    
+    // 2. VERIFY TRANSACTION PIN
+    const user = await User.findById(req.user.id);
+    const isPinValid = await bcrypt.compare(pin, user.transactionPin);
+    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
+
+    // 3. CHECK WALLET BALANCE
+    if (user.walletBalance < amount) {
+      return res.status(400).json({ error: "Insufficient wallet balance" });
+    }
+
+    // 4. CALL FLUTTERWAVE TO PAY THE BILL
+    const flwPayload = {
+      country: "NG",
+      customer, // phone, meter no, or iuc
+      amount,
+      type: type.toUpperCase(), // "AIRTIME", "DATA", "ELECTRICITY", "CABLE"
+      ...(item_code && { item_code }), // only for data/cable
+      ...(code && { code }) // only for airtime
+    };
+
+    const result = await payBill({
+      userId: req.user.id, 
+      amount, 
+      type: type.toUpperCase(),
+      description: `${type}: ${customer}`,
+      flwPayload
+    });
+
+    res.json({ 
+      success: true, 
+      message: `${type} purchase successful`, 
+      data: result 
+    });
+
+  } catch (err) {
+    console.log("BILL PAY ERROR:", err.message);
+    res.status(500).json({ error: err.response?.data || err.message });
+  }
+});
 }
-// GET NETWORKS FOR DROPDOWN
-app.get('/api/bills/networks', auth, async (req, res) => {
-  try {
-    const axios = require('axios');
-    const response = await axios.get('https://api.flutterwave.com/v3/bill-categories', {
-      headers: {
-        'Authorization': `Bearer ${process.env.FLW_SECRET_KEY}` // <-- use this name
-      }
-    });
-    
-    // Filter for Airtime and Data only
-    const networks = response.data.data.filter(s => 
-      s.name.includes('AIRTIME') || s.name.includes('DATA')
-    );
-    
-    res.json({ success: true, data: networks });
-  } catch (error) {
-    console.log("NETWORKS ERROR:", error.response?.data || error.message);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-// ===== GROUP 1: AIRTIME & DATA =====
-app.post('/api/bills/airtime', auth, async (req, res) => {
-  try {
-    const { country, customer, amount, item_code, code, pin } = req.body; // customer = phone
-    if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
-    const user = await User.findById(req.user.id);
-    const isPinValid = await bcrypt.compare(pin, user.transactionPin);
-    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
 
-    const result = await payBill({
-      userId: req.user.id, amount, type: "AIRTIME",
-      description: `Airtime: ${customer}`,
-      flwPayload: { country: "NG", customer, amount, type: "AIRTIME", item_code, code }
-    });
-    res.json({ success: true, message: "Airtime sent", ...result });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
-app.post('/api/bills/data', auth, async (req, res) => {
-  try {
-    const { country, customer, amount, item_code, code, pin } = req.body; // customer = phone
-    if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
-    const user = await User.findById(req.user.id);
-    const isPinValid = await bcrypt.compare(pin, user.transactionPin);
-    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
 
-    const result = await payBill({
-      userId: req.user.id, amount, type: "DATA",
-      description: `Data: ${customer}`,
-      flwPayload: { country: "NG", customer, amount, type: "DATA", item_code, code }
-    });
-    res.json({ success: true, message: "Data bundle sent", ...result });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
-// ===== GROUP 2: BILLS - ELECTRICITY + CABLE =====
-app.post('/api/bills/electricity', auth, async (req, res) => {
-  try {
-    const { country, customer, amount, item_code, code, pin } = req.body; // customer = meter no
-    if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
-    const user = await User.findById(req.user.id);
-    const isPinValid = await bcrypt.compare(pin, user.transactionPin);
-    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
 
-    const result = await payBill({
-      userId: req.user.id, amount, type: "ELECTRICITY",
-      description: `Electricity: ${customer}`,
-      flwPayload: { country: "NG", customer, amount, type: "ELECTRICITY", item_code, code }
-    });
-    res.json({ success: true, message: "Electricity token sent", ...result });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
-app.post('/api/bills/cable', auth, async (req, res) => {
-  try {
-    const { country, customer, amount, item_code, code, pin } = req.body; // customer = smartcard
-    if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
-    const user = await User.findById(req.user.id);
-    const isPinValid = await bcrypt.compare(pin, user.transactionPin);
-    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
 
-    const result = await payBill({
-      userId: req.user.id, amount, type: "CABLE",
-      description: `Cable TV: ${customer}`,
-      flwPayload: { country: "NG", customer, amount, type: "CABLE", item_code, code }
-    });
-    res.json({ success: true, message: "Cable subscription active", ...result });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
-// ===== GROUP 3: MORE - JAMB/WAEC/BETTING =====
-app.post('/api/bills/jamb', auth, async (req, res) => {
-  try {
-    const { country, customer, amount, item_code, code, pin } = req.body;
-    if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
-    const user = await User.findById(req.user.id);
-    const isPinValid = await bcrypt.compare(pin, user.transactionPin);
-    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
-
-    const result = await payBill({
-      userId: req.user.id, amount, type: "JAMB",
-      description: `JAMB PIN`,
-      flwPayload: { country: "NG", customer, amount, type: "JAMB", item_code, code }
-    });
-    res.json({ success: true, message: "JAMB PIN purchased", ...result });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/bills/waec', auth, async (req, res) => {
-  try {
-    const { country, customer, amount, item_code, code, pin } = req.body;
-    if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
-    const user = await User.findById(req.user.id);
-    const isPinValid = await bcrypt.compare(pin, user.transactionPin);
-    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
-
-    const result = await payBill({
-      userId: req.user.id, amount, type: "WAEC",
-      description: `WAEC PIN`,
-      flwPayload: { country: "NG", customer, amount, type: "WAEC", item_code, code }
-    });
-    res.json({ success: true, message: "WAEC PIN purchased", ...result });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/bills/betting', auth, async (req, res) => {
-  try {
-    const { country, customer, amount, item_code, code, pin } = req.body; // customer = betting ID
-    if (!pin) return res.status(400).json({ error: "Transaction PIN required" });
-    const user = await User.findById(req.user.id);
-    const isPinValid = await bcrypt.compare(pin, user.transactionPin);
-    if (!isPinValid) return res.status(400).json({ error: "Invalid transaction PIN" });
-
-    const result = await payBill({
-      userId: req.user.id, amount, type: "BETTING",
-      description: `Betting: ${customer}`,
-      flwPayload: { country: "NG", customer, amount, type: "BETTING", item_code, code }
-    });
-    res.json({ success: true, message: "Betting wallet funded", ...result });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 // FLUTTERWAVE DEPOSIT WEBHOOK HANDLER
 app.post('/deposit-webhook', async (req, res) => {
   try {
