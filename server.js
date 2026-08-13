@@ -921,6 +921,148 @@ app.post('/webhook/flutterwave', async (req, res) => {
     console.error("❌ VA Webhook Error:", err.message);
   }
 }); 
+// =========================================================================
+// LIVE FLUTTERWAVE BILLS PAYMENT PROXY ENDPOINT
+// =========================================================================
+app.post('/api/bills/pay', auth, async (req, res) => {
+  try {
+    const { billType, serviceProvider, amount, customerId } = req.body;
+
+    // 1. Parameter presence validations
+    if (!billType || !serviceProvider || !amount || !customerId) {
+      return res.status(400).json({ error: "Missing required billing payment parameters." });
+    }
+
+    const numericAmount = parseFloat(amount);
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({ error: "Please provide a valid transaction amount." });
+    }
+
+    // 2. Locate active database user 
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: "User session account context not found." });
+    }
+
+    // 3. Balance authorization step
+    if (user.wallet_balance < numericAmount) {
+      return res.status(400).json({ error: "Insufficient wallet balance to perform this operation." });
+    }
+
+    // 4. Map provider inputs to strict live Flutterwave biller identifiers
+    let flwBillerCode = '';
+    
+    switch (billType.toLowerCase()) {
+      case 'airtime':
+        if (serviceProvider.includes('mtn')) flwBillerCode = 'BIL099';
+        else if (serviceProvider.includes('airtel')) flwBillerCode = 'BIL100';
+        else if (serviceProvider.includes('glo')) flwBillerCode = 'BIL102';
+        else if (serviceProvider.includes('9mobile')) flwBillerCode = 'BIL101';
+        break;
+      case 'data':
+        if (serviceProvider.includes('mtn')) flwBillerCode = 'BIL104';
+        else if (serviceProvider.includes('airtel')) flwBillerCode = 'BIL105';
+        else if (serviceProvider.includes('glo')) flwBillerCode = 'BIL107';
+        else if (serviceProvider.includes('9mobile')) flwBillerCode = 'BIL106';
+        break;
+      case 'cable':
+        if (serviceProvider.includes('dstv')) flwBillerCode = 'BIL121';
+        else if (serviceProvider.includes('gotv')) flwBillerCode = 'BIL122';
+        else if (serviceProvider.includes('startimes')) flwBillerCode = 'BIL123';
+        break;
+      case 'electricity':
+        if (serviceProvider.includes('ikedc')) flwBillerCode = 'BIL112'; 
+        else if (serviceProvider.includes('ekedc')) flwBillerCode = 'BIL113'; 
+        else if (serviceProvider.includes('aedc')) flwBillerCode = 'BIL114';  
+        break;
+      case 'jamb':
+        flwBillerCode = 'BIL125';
+        break;
+      case 'waec':
+        flwBillerCode = 'BIL126';
+        break;
+      case 'betting':
+        if (serviceProvider.includes('bet9ja')) flwBillerCode = 'BIL130';
+        else if (serviceProvider.includes('sportybet')) flwBillerCode = 'BIL131';
+        break;
+      default:
+        return res.status(400).json({ error: "Unsupported bill category type." });
+    }
+
+    if (!flwBillerCode) {
+      return res.status(400).json({ error: `Provider mapping for ${serviceProvider} is incomplete.` });
+    }
+
+    // 5. Generate a unique transaction reference identifier
+    const reference = `VP-BILL-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    console.log(`📡 Sending Live Bill Request to Flutterwave for user: ${user.email}`);
+
+    // 6. Direct HTTP Request to Flutterwave's live API v3 infrastructure
+    const flwResponse = await axios.post(
+      'https://flutterwave.com',
+      {
+        country: "NG",
+        customer: customerId.trim(),
+        amount: numericAmount,
+        type: flwBillerCode,
+        reference: reference
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.FLW_SECRET_KEY}`, 
+          'Content-Type': 'application/json'
+        },
+        timeout: 25000
+      }
+    );
+
+    // 7. Verify Flutterwave dispatch response status details
+    if (flwResponse.data.status !== 'success') {
+      return res.status(400).json({ 
+        error: "Flutterwave pipeline rejected payment.", 
+        details: flwResponse.data.message 
+      });
+    }
+
+    // 8. Deduct funds from database ledger only after API success
+    user.wallet_balance -= numericAmount;
+    await user.save();
+
+    // 9. Generate transaction collection records history
+    const description = `${billType.toUpperCase()} purchase via ${serviceProvider.toUpperCase()} for ${customerId}`;
+    const newTransaction = new Transaction({
+      userId: user._id,
+      type: 'debit',
+      amount: numericAmount,
+      description: description,
+      reference: reference,
+      status: 'successful',
+      recipient: customerId
+    });
+    await newTransaction.save();
+
+    // 10. Deliver status payload back to Flutter frontend app context
+    return res.status(200).json({
+      success: true,
+      message: flwResponse.data.message || "Bill payment processed successfully!",
+      newBalance: user.wallet_balance,
+      transaction: {
+        reference: reference,
+        description: description,
+        amount: numericAmount
+      }
+    });
+
+  } catch (err) {
+    const errorResponse = err.response?.data?.message || err.message;
+    console.error("❌ Live Flutterwave API Error:", errorResponse);
+    return res.status(500).json({ 
+      error: "Failed to securely fulfill live third-party billing request.", 
+      details: errorResponse 
+    });
+  }
+});
 
 // Start Server
 const PORT = process.env.PORT || 5000;
