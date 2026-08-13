@@ -965,11 +965,17 @@ app.post('/api/bills/pay', auth, async (req, res) => {
         else if (serviceProvider.includes('glo')) flwBillerCode = 'BIL107';
         else if (serviceProvider.includes('9mobile')) flwBillerCode = 'BIL106';
         break;
-      case 'cable':
-        if (serviceProvider.includes('dstv')) flwBillerCode = 'BIL121';
-        else if (serviceProvider.includes('gotv')) flwBillerCode = 'BIL122';
-        else if (serviceProvider.includes('startimes')) flwBillerCode = 'BIL123';
+           case 'cable':
+        // Explicitly check the string incoming from the frontend provider field
+        if (serviceProvider.includes('dstv')) {
+          flwBillerCode = 'BIL119'; // Exact Flutterwave Live code for DSTV Subscriptions
+        } else if (serviceProvider.includes('gotv')) {
+          flwBillerCode = 'BIL120'; // Exact Flutterwave Live code for GOtv Subscriptions
+        } else if (serviceProvider.includes('startimes')) {
+          flwBillerCode = 'BIL123'; 
+        }
         break;
+
       case 'electricity':
         if (serviceProvider.includes('ikedc')) flwBillerCode = 'BIL112'; 
         else if (serviceProvider.includes('ekedc')) flwBillerCode = 'BIL113'; 
