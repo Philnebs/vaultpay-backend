@@ -1103,7 +1103,7 @@ app.get('/api/bills/packages', auth, async (req, res) => {
 
     // Call Flutterwave's biller information database portal directly
     const response = await axios.get(
-      `https://flutterwave.com{flwBillerCode}/items`,
+       `https://api.flutterwave.com/v3/billers/${flwBillerCode}/items`,
       {
         headers: {
           'Authorization': `Bearer ${process.env.FLW_SECRET_KEY}`,
