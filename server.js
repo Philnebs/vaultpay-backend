@@ -1069,6 +1069,69 @@ app.post('/api/bills/pay', auth, async (req, res) => {
     });
   }
 });
+// ==========================================
+// FETCH DYNAMIC BILLER PACKAGES VIA FLUTTERWAVE
+// ==========================================
+app.get('/api/bills/packages', auth, async (req, res) => {
+  try {
+    const { billType, serviceProvider } = req.query;
+
+    if (!billType || !serviceProvider) {
+      return res.status(400).json({ error: "Missing billType or serviceProvider query strings." });
+    }
+
+    let flwBillerCode = '';
+    
+    // Map to the active Flutterwave biller group categories
+    if (billType === 'cable') {
+      if (serviceProvider.includes('dstv')) flwBillerCode = 'BIL119';
+      else if (serviceProvider.includes('gotv')) flwBillerCode = 'BIL120';
+      else if (serviceProvider.includes('startimes')) flwBillerCode = 'BIL123';
+    } else if (billType === 'data') {
+      if (serviceProvider.includes('mtn')) flwBillerCode = 'BIL104';
+      else if (serviceProvider.includes('airtel')) flwBillerCode = 'BIL105';
+      else if (serviceProvider.includes('glo')) flwBillerCode = 'BIL107';
+      else if (serviceProvider.includes('9mobile')) flwBillerCode = 'BIL106';
+    }
+
+    // If it's a standard airtime/electricity type with no bundles, return an empty array
+    if (!flwBillerCode) {
+      return res.status(200).json({ success: true, packages: [] });
+    }
+
+    console.log(`📡 Fetching live bouquets for biller code: ${flwBillerCode}`);
+
+    // Call Flutterwave's biller information database portal directly
+    const response = await axios.get(
+      `https://flutterwave.com{flwBillerCode}/items`,
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.FLW_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000
+      }
+    );
+
+    if (response.data.status !== 'success') {
+      return res.status(400).json({ error: "Failed to pull package data from Flutterwave gateway." });
+    }
+
+    // Format the items down into a clean map for your mobile frontend layout
+    const cleanPackages = response.data.data.map(item => ({
+      name: `${item.name} (₦${item.amount})`,
+      price: parseFloat(item.amount),
+      code: item.biller_name // The unique plan identifier string needed to complete payments
+    }));
+
+    return res.status(200).json({ success: true, packages: cleanPackages });
+
+  } catch (err) {
+    console.error("❌ Live Package Directory Error:", err.message);
+    return res.status(500).json({ error: "Server failed to fetch active utility packages." });
+  }
+});
+
 
 // Start Server
 const PORT = process.env.PORT || 5000;
