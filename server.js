@@ -344,7 +344,7 @@ app.post('/send', auth, async (req, res) => {
       narration: description || "VaultPay Transfer",
       currency: "NGN",
       reference: uniqueReference,
-      callback_url: "https://your-render-app.onrender.com/webhook/flutterwave" // Adjust as needed
+      callback_url: "https://vaultpay.onrender.com/webhook/flutterwave" // Adjust as needed
     };
 
     // 7. Make the live API Call to Flutterwave to execute the transfer
@@ -1006,7 +1006,7 @@ app.post('/api/bills/pay', auth, async (req, res) => {
 
     // 6. Direct HTTP Request to Flutterwave's live API v3 infrastructure
     const flwResponse = await axios.post(
-      'https://flutterwave.com',
+      'https://api.flutterwave.com/v3/bills',
       {
         country: "NG",
         customer: customerId.trim(),
