@@ -42,14 +42,16 @@ const User = mongoose.model('User', UserSchema);
 
 // Transaction Model
 const transactionSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['credit', 'debit'], required: true },
-  amount: { type: Number, required: true },
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  type: { type: String, enum: ['Bank Transfer', 'Deposit', 'Airtime', 'Data'], required: true },
+  amount: { type: Number, required: true }, // -100 for debit, +5000 for credit
   description: { type: String, required: true },
+  recipient_account: { type: String }, // for Bank Transfer debit
+  recipient_bank: { type: String }, // for Bank Transfer debit
+  sender_name: { type: String }, // for Deposit credit
   reference: { type: String, unique: true },
-  status: { type: String, default: 'successful' },
-  recipient: { type: String },
-  date: { type: Date, default: Date.now }
+  status: { type: String, enum: ['PENDING', 'SUCCESSFUL', 'FAILED'], default: 'PENDING' },
+  created_at: { type: Date, default: Date.now }
 });
 
 const Transaction = mongoose.model('Transaction', transactionSchema);
@@ -86,9 +88,38 @@ app.post('/api/webhook/flutterwave', async (req, res) => {
   console.log("Webhook event:", event.event);
 
   if (event.event === "virtual_account.credit") {
-    const { account_number, amount, transaction_id } = event.data;
-    // credit user wallet logic goes here
+  const { account_number, amount, transaction_id, sender_name } = event.data;
+
+  try {
+    // 1. Find the user with this virtual account number
+    const user = await User.findOne({ account_number: account_number });
+    if (!user) {
+      console.log("User not found for account:", account_number);
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // 2. Credit user wallet
+    user.wallet_balance += Number(amount);
+    await user.save();
+
+    // 3. SAVE TRANSACTION TO DB
+    const depositTransaction = new Transaction({
+      user_id: user._id,
+      type: 'Deposit',
+      amount: Number(amount), // positive
+      description: `Deposit from ${sender_name || 'Bank Transfer'}`,
+      sender_name: sender_name,
+      reference: transaction_id,
+      status: 'SUCCESSFUL',
+    });
+    await depositTransaction.save();
+
+    console.log(`Credited ${amount} to ${user.email}`);
+
+  } catch (error) {
+    console.log("Webhook credit error:", error);
   }
+}
   
   res.status(200).json({ status: "success" });
 });
