@@ -186,6 +186,7 @@ app.post('/api/register/verify', async (req, res) => {
     }
 
     const flwData = flwResponse.data;
+    //CREATE TOKEN
     const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "7d" });
 
     user.isVerified = true;
@@ -218,6 +219,467 @@ app.post('/api/register/verify', async (req, res) => {
     return res.status(500).json({ error: "Verification pipeline crash.", details: errorMsg });
   }
 });
+
+// LOGIN
+app.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    const user = await User.findOne({ email });
+    if (!user) return res.status(400).json({ error: "User not found" });
+    
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(400).json({ error: "Wrong password" });
+    
+    const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "7d" });
+    
+    const { password: _, ...userWithoutPassword } = user.toObject();
+    res.json({ message: "Login successful", token, user: userWithoutPassword });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// SET TRANSACTION PIN
+app.post('/set-pin', auth, async (req, res) => {  try {
+    const { pin } = req.body;
+    const userId = req.user.id;
+
+    if (!pin || pin.length !== 4 || isNaN(pin)) {
+      return res.status(400).json({ error: "PIN must be 4 digits" });
+    }
+
+    const hashedPin = await bcrypt.hash(pin, 10);
+    await User.findByIdAndUpdate(userId, { transactionPin: hashedPin });
+
+    res.json({ message: "Transaction PIN set successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// BALANCE
+app.get('/balance', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    
+    res.json({ 
+      name: user.name,
+      account_number: user.account_number,
+      balance: user.wallet_balance 
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET USER TRANSACTION HISTORY WITH PAGINATION AND LIMITS
+app.get('/transactions', auth, async (req, res) => {
+  try {
+    // 1. Get query parameters from the URL (defaults: page 1, limit 10)
+    // Example: /transactions?limit=5 will load only 5 items
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // 2. Fetch the paginated records from MongoDB
+    const history = await Transaction.find({ userId: req.user.id })
+      .sort({ date: -1 }) // Newest first
+      .skip(skip)         // Skip items from previous pages
+      .limit(limit);      // Limit the number of items returned
+
+    // 3. Count total transactions for this user (useful for frontend pagination UI)
+    const totalTransactions = await Transaction.countDocuments({ userId: req.user.id });
+
+    // 4. Return clear structural data back to the frontend
+    res.json({
+      success: true,
+      currentPage: page,
+      totalPages: Math.ceil(totalTransactions / limit),
+      totalItems: totalTransactions,
+      count: history.length,
+      transactions: history
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// TRANSFER TO REAL BANK ACCOUNTS VIA FLUTTERWAVE
+app.post('/send', auth, async (req, res) => {
+  try {
+    const { account_number, bank_code, amount, pin, description } = req.body;
+
+    // 1. Basic validation
+    if (!account_number || !bank_code || !amount || !pin) {
+      return res.status(400).json({ error: "Missing required transfer fields" });
+    }
+    if (amount <= 0) {
+      return res.status(400).json({ error: "Amount must be greater than 0" });
+    }
+
+    // 2. Fetch the sender inside your system
+    const sender = await User.findById(req.user.id);
+    if (!sender) {
+      return res.status(404).json({ error: "Sender profile not found" });
+    }
+
+    // 3. Verify sender's security PIN
+    const isPinValid = await bcrypt.compare(pin, sender.transactionPin);
+    if (!isPinValid) {
+      return res.status(400).json({ error: "Invalid transaction PIN" });
+    }
+
+    // 4. Verify sender has enough funds inside your app balance
+    if (sender.wallet_balance < amount) {
+      return res.status(400).json({ error: "Insufficient wallet balance" });
+    }
+
+    // 5. Generate a unique transaction reference for tracking
+    const uniqueReference = `VTP_TX_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+    // 6. Build the payload for the Flutterwave Payout API Engine
+    const flutterwavePayload = {
+      account_bank: bank_code,
+      account_number: account_number,
+      amount: Number(amount),
+      narration: description || "VaultPay Transfer",
+      currency: "NGN",
+      reference: uniqueReference,
+      callback_url: "https://your-render-app.onrender.com/webhook/flutterwave" // Adjust as needed
+    };
+
+    // 7. Make the live API Call to Flutterwave to execute the transfer
+    const response = await axios.post(
+       'https://api.flutterwave.com/v3/transfers',
+      flutterwavePayload,
+      {
+        headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
+      }
+    );
+
+    // 8. Deduct the funds from the user's wallet balance if API call is successful
+    sender.wallet_balance -= amount;
+    await sender.save();
+
+    // 9. Save log details to your MongoDB transaction collection
+    const newTransaction = new Transaction({
+      userId: sender._id,
+      type: 'debit',
+      amount: amount,
+      description: description || "Bank Transfer",
+      reference: uniqueReference,
+      status: response.data.status === "success" ? 'successful' : 'pending',
+      recipient: `${account_number} (${bank_code})`
+    });
+    await newTransaction.save();
+
+    // 10. Return final updated data back to your frontend
+    res.json({
+      message: "Transfer initiated successfully",
+      newBalance: sender.wallet_balance,
+      transferDetails: response.data.data
+    });
+
+  } catch (err) {
+    // Graceful error logging to catch invalid bank details or upstream server issues
+    const errorMessage = err.response?.data?.message || err.message;
+    res.status(500).json({ error: `Transfer failed: ${errorMessage}` });
+  }
+});
+
+// DEPOSIT
+app.post('/deposit', auth, async (req, res) => {
+  try {
+    const { amount } = req.body;
+    const user = await User.findById(req.user.id);
+
+    if (amount <= 0) return res.status(400).json({ error: "Amount must be greater than 0" });
+
+    const tx_ref = `VTP_FUND_${Date.now()}`;
+
+    const payload = {
+      tx_ref: tx_ref,
+      amount: amount,
+      currency: "NGN",
+      redirect_url: "https://swiftpay-backend-v2.onrender.com/payment-success",
+      customer: {
+        email: user.email,
+        name: user.name
+      },
+      meta: {
+        userId: user._id.toString()
+      },
+      customizations: {
+        title: "VaultPay Wallet Funding",
+        description: `Fund wallet with ${amount}`
+      }
+    };
+
+    const response = await axios.post(
+      'https://api.flutterwave.com/v3/payments',
+      payload,
+      { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` } }
+    );
+
+    res.status(200).json({ 
+      message: 'Payment link created',
+      payment_link: response.data.data.link 
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// WITHDRAW
+app.post('/withdraw', auth, async (req, res) => {
+  try {
+    const { amount } = req.body;
+    const user = await User.findById(req.user.id);
+
+    if (amount <= 0) return res.status(400).json({ error: "Amount must be greater than 0" });
+    if (user.wallet_balance < amount) return res.status(400).json({ error: "Insufficient funds" });
+
+    user.wallet_balance -= amount;
+    await user.save();
+
+    res.json({
+      message: `Withdrew ₦${amount} successfully`,
+      newBalance: user.wallet_balance
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+const FLW_SECRET_KEY = process.env.FLW_SECRET_KEY;
+
+// GET ALL BANKS
+app.get('/banks', async (req, res) => {
+  try {
+    const response = await axios.get('https://api.flutterwave.com/v3/banks/NG', {
+      headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` }
+    });
+    res.json(response.data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// VERIFY ACCOUNT NAME (FIXED API TARGET URL)
+app.post('/verify-account', auth, async (req, res) => {
+  try {
+    const { account_number, bank_code } = req.body;
+
+    if (!account_number || !bank_code) {
+      return res.status(400).json({ error: "account_number and bank_code are required" });
+    }
+
+    // THE FIXED API URL: Points strictly to the official API routing infrastructure
+    const targetUrl = 'https://api.flutterwave.com/v3/accounts/resolve';
+
+    const response = await axios.post(targetUrl, {
+      account_number: account_number,
+      account_bank: bank_code
+    }, {
+      headers: { 
+        'Authorization': `Bearer ${process.env.FLW_SECRET_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    // Transmits the resolved name dictionary back to your mobile screen structure
+    res.json(response.data);
+
+  } catch (err) {
+    // Keeps you updated on incoming server responses inside your terminal
+    console.error("❌ Name Verification Backend Error:", err.response?.data || err.message);
+    
+    res.status(500).json({ 
+      error: "Verification failed", 
+      details: err.response?.data?.message || err.message 
+    });
+  }
+});
+
+// GET CURRENT LOGGED-IN USER PROFILE
+app.get('/profile', auth, async (req, res) => {
+  try {
+    // 1. Fetch user data using the ID extracted by the auth middleware
+    // 2. select('-password') ensures the hashed password is NEVER exposed to the frontend
+    const user = await User.findById(req.user.id).select('-password');
+    
+    if (!user) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    // 3. Return clean user details back to your app
+    res.json({
+      success: true,
+      user: user
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+// CHANGE PASSWORD ROUTE
+app.post('/change-password', auth, async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+
+    // 1. Basic input validation
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: "Both old and new passwords are required" });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: "New password must be at least 6 characters long" });
+    }
+
+    // 2. Fetch the user with their password from the database
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // 3. Verify that the old password matches what is in the database
+    const isMatch = await bcrypt.compare(oldPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ error: "Incorrect current password" });
+    }
+
+    // 4. Hash the new password and update the user document
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+    await user.save();
+
+    res.json({ success: true, message: "Password updated successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// INITIATE FORGOT PASSWORD OTP (BREVO API VERSION)
+app.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: "Email required" });
+    const user = await User.findOne({ email });
+    if (!user) return res.status(400).json({ error: "No user found" });
+    
+    const cryptoOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    user.resetOtpCode = cryptoOtp;
+    user.resetOtpExpires = Date.now() + 10 * 60 * 1000;
+    await user.save();
+
+    // FIXED: Correct Brevo API endpoint
+    const brevoResponse = await axios.post(
+      'https://api.brevo.com/v3/smtp/email', // <-- THIS WAS WRONG
+      {
+        sender: { name: "VaultPay Security", email: "ichinegbo@gmail.com" },
+        to: [{ email: email }],
+        subject: "VaultPay Password Reset Code",
+        htmlContent: `<p>Your OTP code is: <strong>${cryptoOtp}</strong>. It expires in 10 minutes.</p>`
+      },
+      {
+        headers: {
+          'api-key': process.env.BREVO_API_KEY,
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000
+      }
+    );
+
+    console.log("✅ Brevo sent:", brevoResponse.data.messageId);
+    return res.status(200).json({ success: true, message: "OTP sent" });
+  } catch (err) {
+    console.error("❌ Brevo Error:", err.response?.data || err.message);
+    return res.status(500).json({ error: err.response?.data?.message || "Failed to send OTP" });
+  }
+});
+
+// SUBMIT OTP AND UPDATE PASSWORD (RESET WINDOW CLOSURE)
+app.post('/reset-password', async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({ error: "Email, OTP code, and new password are required" });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: "New password must be at least 6 characters long" });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(400).json({ error: "User profile mismatch error" });
+
+    // Core validation gate: matches code values and looks up clock expiration states
+    if (user.resetOtpCode !== otp || Date.now() > user.resetOtpExpires) {
+      return res.status(400).json({ error: "Invalid or expired recovery OTP code. Try again." });
+    }
+
+    // Encrypt the fresh password hash identically using your standard 10 salt rounds
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+    
+    // Wipe out the temporary token variables from the database document profile
+    user.resetOtpCode = undefined;
+    user.resetOtpExpires = undefined;
+    await user.save();
+    res.json({ success: true, message: "Your wallet access password has been reset successfully!" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+  
+});
+// VA FUNDING WEBHOOK - When someone sends money to user's account_number
+app.post('/webhook/flutterwave', async (req, res) => {
+  try {
+    res.status(200).send("OK"); // Acknowledge immediately
+    
+    const event = req.body;
+    
+    // Flutterwave sends this event when VA is credited
+    if (event.event === "virtual_account.credit") {
+      const data = event.data;
+      const accountNumber = data.account_number;
+      const amount = data.amount;
+      const reference = data.reference;
+
+      // Prevent duplicate
+      const existingTx = await Transaction.findOne({ reference: reference });
+      if (existingTx) return console.log(`⚠️ Reference ${reference} already processed.`);
+
+      // Find user by account_number
+      const user = await User.findOne({ account_number: accountNumber });
+      if (!user) return console.log(`❌ No user found with account ${accountNumber}`);
+
+      // Credit wallet
+      user.wallet_balance += Number(amount);
+      await user.save();
+
+      // Log transaction
+      const depositTransaction = new Transaction({
+        userId: user._id,
+        type: 'credit',
+        amount: Number(amount),
+        description: `Deposit from ${data.sender_name || 'Bank Transfer'}`,
+        reference: reference,
+        status: 'successful',
+        recipient: accountNumber
+      });
+      await depositTransaction.save();
+
+      console.log(`✅ Credited ₦${amount} to ${user.email}`);
+    }
+  } catch (err) {
+    console.error("❌ VA Webhook Error:", err.message);
+  }
+}); 
+
+
+
 
 // STEP 3: FETCH DYNAMIC BILLER PACKAGES VIA FLUTTERWAVE
 app.get('/api/bills/packages', auth, async (req, res) => {
