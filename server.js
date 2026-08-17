@@ -845,57 +845,6 @@ app.post('/api/bills/pay', auth, async (req, res) => {
   }
 });
 
-// AIRTIME PURCHASE ROUTE
-app.post('/api/airtime/purchase', auth, async (req, res) => {
-  try {
-    const { phoneNumber, network, amount } = req.body;
-    const airtimeAmount = Number(amount);
-
-    // 1. Basic validation
-    if (!phoneNumber || !network || !airtimeAmount || airtimeAmount <= 0) {
-      return res.status(400).json({ success: false, error: "All fields are required and amount must be valid." });
-    }
-
-    // 2. Find user
-    const user = await User.findById(req.user.id);
-    if (!user) {
-      return res.status(404).json({ success: false, error: "User not found." });
-    }
-
-    // 3. Check wallet balance
-    if (user.wallet_balance < airtimeAmount) {
-      return res.status(400).json({ success: false, error: "Insufficient wallet balance." });
-    }
-
-    // 4. Deduct money from balance
-    user.wallet_balance -= airtimeAmount;
-    await user.save();
-
-    // 5. Generate a unique reference tracker
-    const txRef = `VP-AIR-${Date.now()}`;
-
-    // 6. Create transaction record
-    const newTransaction = new Transaction({
-      user_id: user._id,
-      type: 'Airtime',
-      amount: airtimeAmount,
-      description: `Airtime purchase for ${network} (${phoneNumber})`,
-      reference: txRef,
-      status: 'SUCCESSFUL' // Simulating an instant successful purchase
-    });
-    await newTransaction.save();
-
-    return res.status(200).json({
-      success: true,
-      message: `Successfully credited ₦${airtimeAmount} airtime to ${phoneNumber}!`,
-      newBalance: user.wallet_balance
-    });
-
-  } catch (err) {
-    console.error("❌ Airtime Failure:", err.message);
-    return res.status(500).json({ success: false, error: "Failed to process airtime purchase.", details: err.message });
-  }
-});
 
 // WEB SERVICE INITIALIZATION PORT LISTENER
 const PORT = process.env.PORT || 5000;
