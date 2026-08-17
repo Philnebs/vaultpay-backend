@@ -87,39 +87,7 @@ app.post('/api/webhook/flutterwave', async (req, res) => {
   const event = req.body;
   console.log("Webhook event:", event.event);
 
-  if (event.event === "virtual_account.credit") {
-  const { account_number, amount, transaction_id, sender_name } = event.data;
-
-  try {
-    // 1. Find the user with this virtual account number
-    const user = await User.findOne({ account_number: account_number });
-    if (!user) {
-      console.log("User not found for account:", account_number);
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    // 2. Credit user wallet
-    user.wallet_balance += Number(amount);
-    await user.save();
-
-    // 3. SAVE TRANSACTION TO DB
-    const depositTransaction = new Transaction({
-      user_id: user._id,
-      type: 'Deposit',
-      amount: Number(amount), // positive
-      description: `Deposit from ${sender_name || 'Bank Transfer'}`,
-      sender_name: sender_name,
-      reference: transaction_id,
-      status: 'SUCCESSFUL',
-    });
-    await depositTransaction.save();
-
-    console.log(`Credited ${amount} to ${user.email}`);
-
-  } catch (error) {
-    console.log("Webhook credit error:", error);
-  }
-}
+  
   
   res.status(200).json({ status: "success" });
 });
@@ -315,13 +283,13 @@ app.get('/transactions', auth, async (req, res) => {
     const skip = (page - 1) * limit;
 
     // 2. Fetch the paginated records from MongoDB
-    const history = await Transaction.find({ userId: req.user.id })
+    const history = await Transaction.find({ user_Id: req.user.id })
       .sort({ date: -1 }) // Newest first
       .skip(skip)         // Skip items from previous pages
       .limit(limit);      // Limit the number of items returned
 
     // 3. Count total transactions for this user (useful for frontend pagination UI)
-    const totalTransactions = await Transaction.countDocuments({ userId: req.user.id });
+    const totalTransactions = await Transaction.countDocuments({ user_Id: req.user.id });
 
     // 4. Return clear structural data back to the frontend
     res.json({
@@ -396,7 +364,7 @@ app.post('/send', auth, async (req, res) => {
 
     // 9. Save log details to your MongoDB transaction collection
     const newTransaction = new Transaction({
-      userId: sender._id,
+      user_id: sender.id,
       type: 'debit',
       amount: amount,
       description: description || "Bank Transfer",
@@ -692,7 +660,7 @@ app.post('/webhook/flutterwave', async (req, res) => {
 
       // Log transaction
       const depositTransaction = new Transaction({
-        userId: user._id,
+        user_id: user.id,
         type: 'credit',
         amount: Number(amount),
         description: `Deposit from ${data.sender_name || 'Bank Transfer'}`,
