@@ -6,6 +6,9 @@ const bcrypt = require('bcryptjs');
 const axios = require('axios');
 require('dotenv').config();
 
+// Syncs your local variable names with your Render dashboard keys
+process.env.FLW_WEBHOOK_HASH = process.env.FLW_HASH_KEY;
+
 const app = express();
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -356,7 +359,7 @@ app.post('/api/transfer/send', auth, async (req, res) => {
         narrative: description || "VaultPay Transfer",
         currency: "NGN",
         reference: uniqueRef,
-        callback_url: "https://yourdomain.com"
+        callback_url: 'https://vaultpay-backend-883s.onrender.com'
       },
       { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`, 'Content-Type': 'application/json' }, timeout: 18000 }
     );
