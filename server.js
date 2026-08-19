@@ -453,6 +453,34 @@ app.post('/api/auth/reset-password', async (req, res) => {
   }
 });
 
+// GET ALL NIGERIAN BANKS
+app.get('/api/banks', async (req, res) => {
+  try {
+    const flwResponse = await axios.get(
+      'https://api.flutterwave.com/v3/banks/NG',
+      { 
+        headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` },
+        timeout: 10000
+      }
+    );
+
+    if (flwResponse.data.status !== 'success') {
+      return res.status(400).json({ error: "Could not fetch banks" });
+    }
+
+    // Clean the data: only send what Flutter needs
+    const banks = flwResponse.data.data.map(bank => ({
+      name: bank.name,
+      code: bank.code
+    }));
+
+    return res.status(200).json({ success: true, banks });
+  } catch (err) {
+    const errorMsg = err.response?.data?.message || err.message;
+    return res.status(500).json({ error: "Failed to fetch banks", details: errorMsg });
+  }
+});
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 VaultPay Server running globally on port ${PORT}`);
