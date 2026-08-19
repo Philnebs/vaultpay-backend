@@ -1,3 +1,5 @@
+const Flutterwave = require('flutterwave-node-v3');
+const Brevo = require('@getbrevo/brevo');
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -8,9 +10,11 @@ require('dotenv').config();
 
 // Syncs your local variable names with your Render dashboard keys
 process.env.FLW_WEBHOOK_HASH = process.env.FLW_HASH_KEY;
+const flw = new Flutterwave(process.env.FLW_PUBLIC_KEY, process.env.FLW_SECRET_KEY);
 
 const app = express();
 const JWT_SECRET = process.env.JWT_SECRET;
+
 
 app.use(cors());
 app.use(express.json());
