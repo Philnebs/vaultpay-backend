@@ -28,6 +28,7 @@ mongoose.connect(process.env.MONGO_URI)
   email: { type: String, unique: true },
   phone: String,
   password: String,
+  bvn: { type: String },
 
   account_number: { type: String, unique: true },
   bank_name: { type: String }, 
@@ -39,7 +40,8 @@ mongoose.connect(process.env.MONGO_URI)
   otpExpires: { type: Date },
   resetOtpCode: { type: String },
   resetOtpExpires: { type: Date },
-  created_at: { type: Date, default: Date.now }
+  created_at: { type: Date, default: Date.now },
+    
 });
 
 const User = mongoose.model('User', UserSchema);
@@ -79,49 +81,56 @@ app.post('/api/register/initiate', async (req, res) => {
   try {
     const { name, email, phone, password, bvn } = req.body;
     if (!name || !email || !phone || !password || !bvn) {
-      return res.status(400).json({ error: "All fields and BVN are required." });
+      return res.status(400).json({ error: "All profile registration parameters and BVN are required." });
     }
+    
     const normalizedEmail = email.toLowerCase().trim();
     const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser && existingUser.isVerified) {
-      return res.status(400).json({ error: "Email already registered." });
+      return res.status(400).json({ error: "This email address is already fully registered." });
     }
 
-        const registrationOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    const registrationOtp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpExpiryTime = Date.now() + 15 * 60 * 1000;
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
     
+    // Saves entry parameters including bvn to database mapping cache
     await User.findOneAndUpdate(
       { email: normalizedEmail },
       {
         name: name.trim(),
         phone: phone.trim(),
         password: hashedPassword,
+        bvn: bvn.toString().trim(), // Cache bvn string values smoothly here
         otpCode: registrationOtp,
         otpExpires: otpExpiryTime,
         isVerified: false
       },
       { upsert: true, returnDocument: 'after' }
     );
+
+    console.log(`📧 Sending Brevo OTP Registration Email to: ${normalizedEmail}`);
+
     await axios.post(
       'https://api.brevo.com/v3/smtp/email',
       {
         sender: { name: "VaultPay Security", email: "ichinegbo@gmail.com" },
         to: [{ email: normalizedEmail }],
         subject: "Verify Your VaultPay Account",
-        htmlContent: `<p>Hello ${name},</p><p>Your registration code is: <strong>${registrationOtp}</strong>. It expires in 15 minutes.</p>`
+        htmlContent: `<p>Hello ${name.trim()},</p><p>Your registration code is: <strong>${registrationOtp}</strong>. It expires in 15 minutes.</p>`
       },
       { headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' }, timeout: 15000 }
     );
 
-    return res.status(200).json({ success: true, message: "Verification OTP sent to email." });
+    return res.status(200).json({ success: true, message: "Verification OTP code sent to your email." });
   } catch (err) {
+    console.error("❌ Registration Entry Initialization Crash:", err.message);
     return res.status(500).json({ error: "Failed to process registration entry.", details: err.message });
   }
-
-
 });
+
+
 app.post('/api/register/verify', async (req, res) => {
   try {
     const { email, otp, bvn } = req.body;
