@@ -102,7 +102,7 @@ app.post('/api/register/initiate', async (req, res) => {
         otpExpires: otpExpiryTime,
         isVerified: false
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     await axios.post(
       'https://api.brevo.com/v3/smtp/email',
@@ -120,7 +120,7 @@ app.post('/api/register/initiate', async (req, res) => {
     return res.status(500).json({ error: "Failed to process registration entry.", details: err.message });
   }
 
-  
+
 });
 app.post('/api/register/verify', async (req, res) => {
   try {
