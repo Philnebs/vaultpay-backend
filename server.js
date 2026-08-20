@@ -516,6 +516,60 @@ app.get('/api/banks', async (req, res) => {
   }
 });
 
+app.get('/api/bills/data-bundles', auth, async (req, res) => {
+  try {
+    const { operator } = req.query; // Expects 'MTN', 'GLO', 'AIRTEL', or '9MOBILE'
+    if (!operator) {
+      return res.status(400).json({ error: "Telecom operator parameter is required." });
+    }
+
+    console.log(`📡 Fetching Live Flutterwave Data Bundles for operator: ${operator}`);
+
+    // Call Flutterwave's live bill categories directory API
+    const response = await axios.get(
+      'https://flutterwave.com',
+      {
+        headers: { 
+          Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 20000
+      }
+    );
+
+    if (response.data && response.data.status === 'success') {
+      const allBundles = response.data.data;
+      
+      // Filter out raw items matching your chosen operator name keyword string safely
+     // REPLACE your old filtering block inside /api/bills/data-bundles with this:
+const filteredBundles = allBundles.filter(item => {
+  const name = item.biller_name.toUpperCase();
+  const operatorName = operator.toUpperCase();
+  
+  // Checks if the item belongs to the selected operator and is a data service
+  const matchesOperator = name.includes(operatorName) || (operatorName === '9MOBILE' && name.includes('0903'));
+  const isDataProduct = name.includes("DATA") || name.includes("BUNDLE") || name.includes("INTERNET");
+  
+  return matchesOperator && isDataProduct;
+}).map(item => ({
+  biller_code: item.biller_code, 
+  item_code: item.item_code,     
+  name: item.name.toUpperCase(), 
+  price: item.amount,            
+}));
+
+      return res.status(200).json({ success: true, bundles: filteredBundles });
+    } else {
+      return res.status(400).json({ error: "Could not retrieve live packages from provider." });
+    }
+
+  } catch (err) {
+    console.error("❌ Flutterwave Bill Categories Call Failed:", err.message);
+    return res.status(500).json({ error: "Failed to load live data packages from remote gateway." });
+  }
+});
+
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 VaultPay Server running globally on port ${PORT}`);
