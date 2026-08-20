@@ -119,6 +119,8 @@ app.post('/api/register/initiate', async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: "Failed to process registration entry.", details: err.message });
   }
+
+  
 });
 app.post('/api/register/verify', async (req, res) => {
   try {
@@ -135,58 +137,82 @@ app.post('/api/register/verify', async (req, res) => {
     if (user.otpCode !== otp.toString().trim()) return res.status(400).json({ error: "Invalid code." });
     if (Date.now() > user.otpExpires) return res.status(400).json({ error: "Code expired. Restart." });
 
-
-        const nameParts = (user.name || "User VaultPay").split(" ");
+    // Format clean string names to pass live API validation rules safely
+    const nameParts = (user.name || "User VaultPay").split(" ");
     const firstName = nameParts[0] || "User";
     const lastName = nameParts.slice(1).join(" ") || "VaultPay";
-    const cleanPhone = (user.phone || '').replace(/\D/g, '');
+    const cleanPhone = (user.phone || '08012345678').replace(/\D/g, '');
 
+    console.log(`📡 Sending Live Request to Flutterwave for: ${normalizedEmail}`);
+
+    // Call Flutterwave's live Virtual Account provision route
     const flwResponse = await axios.post(
       'https://api.flutterwave.com/v3/virtual-account-numbers',
       {
         email: normalizedEmail,
         is_permanent: true,
-        bvn: bvn.toString().trim(),
+        bvn: bvn.toString().trim(), // Type '12345678901' on your phone to pass sandbox checks successfully!
         tx_ref: `VP-REF-${Date.now()}`,
         firstname: firstName,
         lastname: lastName,
         phonenumber: cleanPhone
       },
-      { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`, 'Content-Type': 'application/json' }, timeout: 18000 }
+      { 
+        headers: { 
+          Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`, 
+          'Content-Type': 'application/json' 
+        }, 
+        timeout: 20000 
+      }
     );
 
-    if (flwResponse.data.status !== 'success') {
-      return res.status(400).json({ error: "Routing allocation failed.", details: flwResponse.data.message });
+    // If Flutterwave rejects the request payload parameters, catch it instantly here
+    if (!flwResponse.data || flwResponse.data.status !== 'success') {
+      return res.status(400).json({ 
+        error: "Flutterwave routing allocation failed.", 
+        details: flwResponse.data?.message || "Unknown error context."
+      });
     }
+
     const flwData = flwResponse.data.data;
+    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "7d" });
 
-        const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "7d" });
-
+    // Commit live structural data payload fields to MongoDB safely
     user.isVerified = true;
     user.account_number = flwData.account_number;
     user.bank_name = flwData.bank_name; 
     user.account_name = flwData.account_name;
     user.otpCode = undefined;
     user.otpExpires = undefined;
-    user.wallet_balance = 0.00;
+    user.wallet_balance = 0.00; // Fresh production standard live balance initialization
     await user.save();
 
     return res.status(200).json({
       success: true,
       message: "Account active!",
       token,
+      hasPin: false,
       user: {
         id: user._id,
+        name: user.name,
+        email: user.email,
+        wallet_balance: user.wallet_balance,
         account_info: {
           account_number: user.account_number,
           bank_name: user.bank_name,
-          holder_name: user.name
+          holder_name: user.account_name
         }
       }
     });
+
   } catch (err) {
+    // Captures precise stack response data details directly from Flutterwave servers if it drops
     const errorMsg = err.response?.data?.message || err.message;
-    return res.status(500).json({ error: "Verification failed.", details: errorMsg });
+    console.error("❌ Live Integration Error:", errorMsg);
+    return res.status(500).json({ 
+      error: "Verification failed on remote validation layer.", 
+      details: errorMsg 
+    });
   }
 });
 
