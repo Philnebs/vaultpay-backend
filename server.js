@@ -527,7 +527,7 @@ app.get('/api/bills/data-bundles', auth, async (req, res) => {
 
     // Call Flutterwave's live bill categories directory API
     const response = await axios.get(
-      'https://flutterwave.com',
+      'https://api.flutterwave.com/v3/bills',
       {
         headers: { 
           Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
