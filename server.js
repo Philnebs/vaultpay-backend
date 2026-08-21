@@ -15,6 +15,68 @@ const flw = new Flutterwave(process.env.FLW_PUBLIC_KEY, process.env.FLW_SECRET_K
 const app = express();
 const JWT_SECRET = process.env.JWT_SECRET;
 
+// Chunk 1: Flutterwave Biller Code Dictionary Mapping
+// Updated Chunk 1: Automatic Environment-Aware Biller Codes
+const isLive = process.env.FLW_SECRET_KEY && process.env.FLW_SECRET_KEY.startsWith("FLWSECK-");
+
+const BILLER_CODES = {
+  // Cable TV Operators
+  'dstv': isLive ? 'BIL119' : 'BIL119', // (Note: If FLW uses same codes for test/live, keep them identical)
+  'gotv': isLive ? 'BIL120' : 'BIL120',
+  'startimes': isLive ? 'BIL121' : 'BIL121',
+  
+  // Electricity DisCos (Prepaid)
+  'ikedc_prepaid': isLive ? 'BIL113' : 'BIL113', 
+  'ekedc_prepaid': isLive ? 'BIL112' : 'BIL112', 
+  'aedc_prepaid': isLive ? 'BIL111' : 'BIL111',  
+  
+  // Electricity DisCos (Postpaid)
+  'ikedc_postpaid': isLive ? 'BIL117' : 'BIL117',
+  'ekedc_postpaid': isLive ? 'BIL116' : 'BIL116',
+  'aedc_postpaid': isLive ? 'BIL115' : 'BIL115'
+};
+
+// Chunk 2: Fetch Live Utility Packages Endpoint
+app.get('/api/bills/packages', auth, async (req, res) => {
+  try {
+    const { operator } = req.query;
+
+    if (!operator) {
+      return res.status(400).json({ error: "Operator parameter is required." });
+    }
+
+    // Look up the official code from our dictionary mapping
+    const billerCode = BILLER_CODES[operator.toLowerCase()];
+    if (!billerCode) {
+      return res.status(400).json({ error: "Unsupported utility provider operator." });
+    }
+
+    // Hit Flutterwave's live biller items catalog registry
+    const response = await axios.get(
+      `https://flutterwave.com{billerCode}/items`,
+      {
+        headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` },
+        timeout: 15000
+      }
+    );
+
+    // Filter, map, and clean up the incoming data structure for your frontend
+    const cleanPackages = response.data.data.map(item => ({
+      name: item.name,
+      price: item.amount,
+      biller_code: billerCode,
+      item_code: item.item_code
+    }));
+
+    return res.status(200).json({ success: true, packages: cleanPackages });
+
+  } catch (err) {
+    const errorMsg = err.response?.data?.message || err.message;
+    return res.status(500).json({ error: "Failed to pull live provider packages.", details: errorMsg });
+  }
+});
+
+
 
 app.use(cors());
 app.use(express.json());
