@@ -579,7 +579,9 @@ app.get('/api/bills/data-bundles', auth, async (req, res) => {
     return res.status(500).json({ error: "Failed to load dynamic data packages." });
   }
 });
-app.post('/api/transfer/send', auth, async (req, res) => {
+
+
+app.post('/api/bills/send', auth, async (req, res) => {
   try {
     const { type, amount, phone_number, operator, pin, description, biller_code, item_code } = req.body;
     
