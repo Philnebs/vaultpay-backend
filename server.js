@@ -618,7 +618,7 @@ app.post('/api/transfer/send', auth, async (req, res) => {
       try {
         // Formulates Flutterwave production standard payload map configurations
         await axios.post(
-          'https://flutterwave.com',
+          'https://api.flutterwave.com/v3/bills',
           {
             country: "NG",
             customer: phone_number.toString(),
