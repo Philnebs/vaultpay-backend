@@ -523,9 +523,26 @@ app.get('/api/bills/data-bundles', auth, async (req, res) => {
       return res.status(400).json({ error: "Telecom operator parameter is required." });
     }
 
-    console.log(`📡 Fetching Live Flutterwave Data Bundles for operator: ${operator}`);
+    const cleanOperator = operator.toUpperCase().trim();
+    const isTestMode = process.env.FLW_SECRET_KEY && process.env.FLW_SECRET_KEY.startsWith("FLWSECK_TEST");
 
-    // Call Flutterwave's live bill categories directory API
+    // 🛡️ FALLBACK ENVIRONMENT RULE: Serve clean local mock plans if calling test keys
+    if (isTestMode) {
+      console.log(`🛠️ Serving Automated Sandbox Bundles for operator: ${cleanOperator}`);
+      
+      const mockPackages = [
+        { biller_code: "BIL108", item_code: "MD1", name: `${cleanOperator} 1GB - 1 DAY (DAILY FLAT)`, price: 350.0 },
+        { biller_code: "BIL108", item_code: "MD2", name: `${cleanOperator} 2.5GB - 2 DAYS (PRO VALUE)`, price: 600.0 },
+        { biller_code: "BIL108", item_code: "MD3", name: `${cleanOperator} 5GB - 7 DAYS (WEEKLY PASS)`, price: 1500.0 },
+        { biller_code: "BIL108", item_code: "MD4", name: `${cleanOperator} 10GB - 30 DAYS (MONTHLY BASIC)`, price: 3000.0 },
+        { biller_code: "BIL108", item_code: "MD5", name: `${cleanOperator} 25GB - 30 DAYS (MONTHLY PRO)`, price: 6500.0 }
+      ];
+      
+      return res.status(200).json({ success: true, bundles: mockPackages });
+    }
+
+    // 📡 PRODUCTION ENVIRONMENT RULE: Hits Flutterwave live server database automatically
+    console.log(`📡 Fetching Live Flutterwave Catalog for operator: ${cleanOperator}`);
     const response = await axios.get(
       'https://api.flutterwave.com/v3/bills',
       {
@@ -540,34 +557,113 @@ app.get('/api/bills/data-bundles', auth, async (req, res) => {
     if (response.data && response.data.status === 'success') {
       const allBundles = response.data.data;
       
-      // Filter out raw items matching your chosen operator name keyword string safely
-     // REPLACE your old filtering block inside /api/bills/data-bundles with this:
-const filteredBundles = allBundles.filter(item => {
-  const name = item.biller_name.toUpperCase();
-  const operatorName = operator.toUpperCase();
-  
-  // Checks if the item belongs to the selected operator and is a data service
-  const matchesOperator = name.includes(operatorName) || (operatorName === '9MOBILE' && name.includes('0903'));
-  const isDataProduct = name.includes("DATA") || name.includes("BUNDLE") || name.includes("INTERNET");
-  
-  return matchesOperator && isDataProduct;
-}).map(item => ({
-  biller_code: item.biller_code, 
-  item_code: item.item_code,     
-  name: item.name.toUpperCase(), 
-  price: item.amount,            
-}));
+      const filteredBundles = allBundles.filter(item => {
+        const name = item.biller_name.toUpperCase();
+        const matchesOperator = name.includes(cleanOperator) || (cleanOperator === '9MOBILE' && name.includes('0903'));
+        const isDataProduct = name.includes("DATA") || name.includes("BUNDLE") || name.includes("INTERNET");
+        return matchesOperator && isDataProduct;
+      }).map(item => ({
+        biller_code: item.biller_code,
+        item_code: item.item_code,
+        name: item.name.toUpperCase(),
+        price: item.amount,
+      }));
 
       return res.status(200).json({ success: true, bundles: filteredBundles });
     } else {
-      return res.status(400).json({ error: "Could not retrieve live packages from provider." });
+      return res.status(400).json({ error: "Could not retrieve live packages from gateway provider." });
     }
 
   } catch (err) {
-    console.error("❌ Flutterwave Bill Categories Call Failed:", err.message);
-    return res.status(500).json({ error: "Failed to load live data packages from remote gateway." });
+    console.error("❌ Data Bundles Endpoint Exception:", err.message);
+    return res.status(500).json({ error: "Failed to load dynamic data packages." });
   }
 });
+app.post('/api/transfer/send', auth, async (req, res) => {
+  try {
+    const { type, amount, phone_number, operator, pin, description, biller_code, item_code } = req.body;
+    
+    // 1. Core Request Payload Validation
+    if (!type || !amount || !phone_number || !operator || !pin) {
+      return res.status(400).json({ error: "Missing required checkout parameters." });
+    }
+
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ error: "Invalid transaction amount valuation." });
+    }
+
+    // 2. Locate User Profile and Validate PIN
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: "User session context missing." });
+    
+    if (!user.transactionPin) {
+      return res.status(400).json({ error: "Please configure a secure transaction PIN first." });
+    }
+
+    const isPinMatch = await bcrypt.compare(pin.toString(), user.transactionPin);
+    if (!isPinMatch) return res.status(400).json({ error: "Incorrect security transaction PIN code." });
+
+    // 3. Balance Sufficiency Ledger Checks
+    if (user.wallet_balance < parsedAmount) {
+      return res.status(400).json({ error: "Insufficient account balance to authorize payment." });
+    }
+
+    const referenceId = `VP-TX-${type.toUpperCase().substring(0, 3)}-${Date.now()}`;
+    const isTestMode = process.env.FLW_SECRET_KEY && process.env.FLW_SECRET_KEY.startsWith("FLWSECK_TEST");
+
+    // 🛡️ DYNAMIC RUNTIME ROUTING ENVIRONMENT CHECK
+    if (!isTestMode) {
+      console.log(`📡 Dispatched Live Bills Payment API Route request to Flutterwave for: ${phone_number}`);
+      try {
+        // Formulates Flutterwave production standard payload map configurations
+        await axios.post(
+          'https://flutterwave.com',
+          {
+            country: "NG",
+            customer: phone_number.toString(),
+            amount: parsedAmount,
+            type: type.toUpperCase() === 'DATA' ? item_code : `${operator.toUpperCase()}_AIRTIME`,
+            reference: referenceId
+          },
+          { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`, 'Content-Type': 'application/json' } }
+        );
+      } catch (flwErr) {
+        const remoteMsg = flwErr.response?.data?.message || flwErr.message;
+        console.error("❌ Live Billing Provider Decline Trace:", remoteMsg);
+        return res.status(400).json({ error: "Utility provider declined checkout transaction processing.", details: remoteMsg });
+      }
+    } else {
+      console.log(`🛠️ Simulated Sandbox Ledger Validation Successful for ${type}: ${phone_number}`);
+    }
+
+    // 4. Update Database Account Balances and Log Ledger Record
+    user.wallet_balance -= parsedAmount;
+    await user.save();
+
+    await Transaction.create({
+      user_id: user._id,
+      type: type, // 'Airtime' or 'Data'
+      amount: parsedAmount,
+      description: description || `${operator.toUpperCase()} ${type.toUpperCase()} PAYMENT`,
+      recipient_account: phone_number,
+      recipient_bank: operator.toUpperCase(),
+      reference: referenceId,
+      status: 'SUCCESSFUL'
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `${type.toUpperCase()} TRANSACTION AUTHORIZED SUCCESSFULLY`,
+      new_balance: user.wallet_balance
+    });
+
+  } catch (err) {
+    console.error("❌ Utility Checkout Endpoint Execution Exception:", err.message);
+    return res.status(500).json({ error: "Failed to process utility purchase execution handler." });
+  }
+});
+
 
 
 const PORT = process.env.PORT || 10000;
