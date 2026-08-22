@@ -53,7 +53,7 @@ app.get('/api/bills/packages', auth, async (req, res) => {
 
     // Hit Flutterwave's live biller items catalog registry
     const response = await axios.get(
-      `https://flutterwave.com{billerCode}/items`,
+      `https://api.flutterwave.com/v3/billers/${billerCode}/items`,
       {
         headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` },
         timeout: 15000
