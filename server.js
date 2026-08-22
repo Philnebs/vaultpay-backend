@@ -421,6 +421,8 @@ app.get('/api/bills/packages', auth, async (req, res) => {
     return res.status(200).json({ success: true, packages: cleanPackages });
 
   } catch (err) {
+     console.log("CRITICAL BILLS ERROR:", err.response?.data || err.message);
+    
     const errorMsg = err.response?.data?.message || err.message;
     return res.status(500).json({ error: "Failed to pull live provider packages.", details: errorMsg });
   }
