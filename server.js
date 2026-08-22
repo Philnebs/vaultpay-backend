@@ -36,46 +36,6 @@ const BILLER_CODES = {
   'aedc_postpaid': isLive ? 'BIL115' : 'BIL115'
 };
 
-// Chunk 2: Fetch Live Utility Packages Endpoint
-app.get('/api/bills/packages', auth, async (req, res) => {
-  try {
-    const { operator } = req.query;
-
-    if (!operator) {
-      return res.status(400).json({ error: "Operator parameter is required." });
-    }
-
-    // Look up the official code from our dictionary mapping
-    const billerCode = BILLER_CODES[operator.toLowerCase()];
-    if (!billerCode) {
-      return res.status(400).json({ error: "Unsupported utility provider operator." });
-    }
-
-    // Hit Flutterwave's live biller items catalog registry
-    const response = await axios.get(
-      'https://api.flutterwave.com/v3/billers/{biller_id}/items?item_code={item_code}',
-      {
-        headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` },
-        timeout: 15000
-      }
-    );
-
-    // Filter, map, and clean up the incoming data structure for your frontend
-    const cleanPackages = response.data.data.map(item => ({
-      name: item.name,
-      price: item.amount,
-      biller_code: billerCode,
-      item_code: item.item_code
-    }));
-
-    return res.status(200).json({ success: true, packages: cleanPackages });
-
-  } catch (err) {
-    const errorMsg = err.response?.data?.message || err.message;
-    return res.status(500).json({ error: "Failed to pull live provider packages.", details: errorMsg });
-  }
-});
-
 
 
 app.use(cors());
@@ -424,6 +384,49 @@ app.post('/api/transfer/verify-account', auth, async (req, res) => {
     return res.status(400).json({ error: "Could not verify account name.", details: errorMsg });
   }
 });
+
+
+// Chunk 2: Fetch Live Utility Packages Endpoint
+app.get('/api/bills/packages', auth, async (req, res) => {
+  try {
+    const { operator } = req.query;
+
+    if (!operator) {
+      return res.status(400).json({ error: "Operator parameter is required." });
+    }
+
+    // Look up the official code from our dictionary mapping
+    const billerCode = BILLER_CODES[operator.toLowerCase()];
+    if (!billerCode) {
+      return res.status(400).json({ error: "Unsupported utility provider operator." });
+    }
+
+    // Hit Flutterwave's live biller items catalog registry
+    const response = await axios.get(
+      'https://api.flutterwave.com/v3/billers/{biller_id}/items?item_code={item_code}',
+      {
+        headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` },
+        timeout: 15000
+      }
+    );
+
+    // Filter, map, and clean up the incoming data structure for your frontend
+    const cleanPackages = response.data.data.map(item => ({
+      name: item.name,
+      price: item.amount,
+      biller_code: billerCode,
+      item_code: item.item_code
+    }));
+
+    return res.status(200).json({ success: true, packages: cleanPackages });
+
+  } catch (err) {
+    const errorMsg = err.response?.data?.message || err.message;
+    return res.status(500).json({ error: "Failed to pull live provider packages.", details: errorMsg });
+  }
+});
+
+
 
 
 //bank transfer
